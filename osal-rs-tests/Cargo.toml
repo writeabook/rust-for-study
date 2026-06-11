@@ -14,7 +14,8 @@ crate-type = ["staticlib", "rlib"]
 [features]
 default = ["freertos"]
 freertos = ["osal-rs/freertos"]
+linux = ["osal-rs/linux"]
 serde = ["osal-rs/serde"]
 
 [dependencies]
-osal-rs = { version = "0.5", path = "../osal-rs" }
+osal-rs = { version = "0.5", path = "../osal-rs", default-features = false }
