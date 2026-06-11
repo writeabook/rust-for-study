@@ -13,7 +13,6 @@ pub mod mutex_tests;
 pub mod queue_tests;
 #[cfg(feature = "freertos")]
 pub mod semaphore_tests;
-#[cfg(feature = "freertos")]
 pub mod system_tests;
 #[cfg(feature = "freertos")]
 pub mod thread_tests;
