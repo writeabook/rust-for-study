@@ -1,27 +1,7 @@
-/***************************************************************************
- *
- * osal-rs
- * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <https://www.gnu.org/licenses/>.
- *
- ***************************************************************************/
-
 extern crate alloc;
 
 use core::time::Duration;
-use osal_rs::os::{ToTick, FromTick};
+use osal_rs::os::{FromTick, ToTick};
 use osal_rs::os::types::TickType;
 use osal_rs::utils::Result;
 use osal_rs::{log_debug, log_info};
@@ -53,10 +33,10 @@ pub fn test_duration_conversion_roundtrip() -> Result<()> {
     log_info!(TAG, "Starting test_duration_conversion_roundtrip");
     let original = Duration::from_millis(500);
     let ticks = original.to_ticks();
-    
+
     let mut converted = Duration::from_millis(0);
     converted.ticks(ticks);
-    
+
     // Allow small rounding error
     let diff = if original > converted {
         original - converted
@@ -84,7 +64,7 @@ pub fn test_duration_one_second() -> Result<()> {
     let duration = Duration::from_secs(1);
     let ticks = duration.to_ticks();
     log_debug!(TAG, "1 second = {} ticks", ticks);
-    assert!(ticks >= 1000); // At least 1000 ticks for 1 second (1kHz tick rate)
+    assert!(ticks >= 1000);
     log_info!(TAG, "test_duration_one_second PASSED");
     Ok(())
 }

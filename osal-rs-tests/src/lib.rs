@@ -22,6 +22,8 @@
 
 extern crate alloc;
 
+mod common;
+
 #[cfg(feature = "freertos")]
 pub mod freertos;
 
