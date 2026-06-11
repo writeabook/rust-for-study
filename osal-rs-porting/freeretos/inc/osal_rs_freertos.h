@@ -1,0 +1,59 @@
+/***************************************************************************
+ *
+ * osal-rs
+ * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, see <https://www.gnu.org/licenses/>.
+ *
+ ***************************************************************************/
+
+#ifndef OSAL_RS_FREERTOS_H
+#define OSAL_RS_FREERTOS_H
+
+#include "FreeRTOS.h"
+#include "semphr.h"
+#include "portmacro.h"
+#include "timers.h"
+#include "task.h"
+
+void osal_rs_critical_section_enter(void);
+
+void osal_rs_critical_section_exit(void);
+
+void osal_rs_port_yield_from_isr(BaseType_t pxHigherPriorityTaskWoken);
+
+void osal_rs_port_end_switching_isr( BaseType_t xSwitchRequired );
+
+/* Timer wrappers for Rust FFI */
+BaseType_t osal_rs_timer_start(TimerHandle_t xTimer, TickType_t xTicksToWait);
+BaseType_t osal_rs_timer_stop(TimerHandle_t xTimer, TickType_t xTicksToWait);
+BaseType_t osal_rs_timer_reset(TimerHandle_t xTimer, TickType_t xTicksToWait);
+BaseType_t osal_rs_timer_change_period(TimerHandle_t xTimer, TickType_t xNewPeriod, TickType_t xTicksToWait);
+BaseType_t osal_rs_timer_delete(TimerHandle_t xTimer, TickType_t xTicksToWait);
+
+int printf_on_uart(const char *format, ...);
+
+uint64_t osal_rs_config_cpu_clock_hz(void);
+TickType_t osal_rs_config_tick_rate_hz(void);
+uint32_t osal_rs_config_max_priorities(void);
+StackType_t osal_rs_config_minimal_stack_size(void);
+uint32_t osal_rs_config_max_task_name_len(void);
+
+void osal_rs_task_enter_critical( void );
+void osal_rs_task_exit_critical( void );
+
+UBaseType_t osal_rs_task_enter_critical_from_isr(void);
+void osal_rs_task_exit_critical_from_isr(UBaseType_t uxSavedInterruptStatus);
+
+#endif /* OSAL_RS_FREERTOS_H */

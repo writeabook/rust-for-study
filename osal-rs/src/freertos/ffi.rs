@@ -1,0 +1,585 @@
+/***************************************************************************
+ *
+ * osal-rs
+ * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, see <https://www.gnu.org/licenses/>.
+ *
+ ***************************************************************************/
+
+//! Foreign Function Interface (FFI) bindings for FreeRTOS.
+//!
+//! This module provides raw FFI declarations for FreeRTOS kernel functions and types.
+//! It directly interfaces with the FreeRTOS C API, providing the foundation for
+//! the safe Rust wrappers in other modules.
+//!
+//! # Contents
+//!
+//! - **Type definitions**: Handles for tasks, queues, semaphores, etc.
+//! - **Constants**: FreeRTOS constants (pdTRUE, pdFALSE, etc.)
+//! - **Function declarations**: Direct bindings to FreeRTOS C functions
+//! - **Utility macros**: Rust macros wrapping common FreeRTOS patterns
+//!
+//! # Safety
+//!
+//! All functions in this module are `unsafe` and require careful handling:
+//! - Null pointer checks
+//! - Proper synchronization
+//! - Correct memory management
+//! - Valid handle usage
+//!
+//! Use the safe wrappers in parent modules instead of calling these directly.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! // Don't use FFI directly - use safe wrappers instead:
+//! use osal_rs::os::{Thread, ThreadFn};
+//!
+//! // This is safe:
+//! let thread = Thread::new("task", 1024, 5);
+//!
+//! // This is unsafe and should be avoided:
+//! // unsafe { xTaskCreate(...) }
+//! ```
+
+#![allow(non_upper_case_globals)]
+#![allow(non_snake_case)]
+
+use core::ffi::{c_char, c_uint, c_void};
+use core::ptr;
+
+use super::types::{BaseType, StackType, UBaseType, TickType, EventBits};
+
+/// Opaque handle to a FreeRTOS task/thread
+pub(super) type ThreadHandle = *const c_void;
+/// Opaque handle to a FreeRTOS queue
+pub(super) type QueueHandle = *const c_void;
+/// Opaque handle to a FreeRTOS semaphore
+pub(super) type SemaphoreHandle = *const c_void;
+/// Opaque handle to a FreeRTOS event group
+pub(super) type EventGroupHandle = *const c_void;
+/// Opaque handle to a FreeRTOS timer
+pub(super) type TimerHandle = *const c_void;
+/// Opaque handle to a FreeRTOS mutex
+pub(super) type MutexHandle = *const c_void;
+/// Callback function type for timers
+pub(super) type TimerCallback = unsafe extern "C" fn(timer: TimerHandle);
+/// Task state enumeration
+pub(super) type TaskState = c_uint;
+
+// Task states
+pub(super) mod task {
+    use super::TaskState;
+
+    pub(in crate::freertos) const RUNNING: TaskState = 0;
+    pub(in crate::freertos) const READY: TaskState = 1;
+    pub(in crate::freertos) const BLOCKED: TaskState = 2;
+    pub(in crate::freertos) const SUSPENDED: TaskState = 3;
+    pub(in crate::freertos) const DELETED: TaskState = 4;
+    pub(in crate::freertos) const INVALID: TaskState = 5;
+}
+
+// Boolean/status constants
+pub(super) const pdFALSE: BaseType = 0;
+
+pub(super) const pdTRUE: BaseType = 1;
+
+pub(super) const pdPASS: BaseType = pdTRUE;
+
+pub(super) const pdFAIL: BaseType = pdFALSE;
+
+// Task notification constants
+pub(super) const tskDEFAULT_INDEX_TO_NOTIFY: UBaseType = 0;
+
+// Semaphore constants
+// Queue constants
+#[allow(dead_code)]
+pub(super) mod sem {
+    use super::TickType;
+
+    pub(in crate::freertos) const BINARY_SEMAPHORE_QUEUE_LENGTH: u8 = 1;
+    pub(in crate::freertos) const SEMAPHORE_QUEUE_ITEM_LENGTH: u8 = 0;
+    pub(in crate::freertos) const GIVE_BLOCK_TIME: TickType = 0;
+}
+
+// Queue constants
+#[allow(dead_code)]
+pub(super) mod queue {
+    use crate::os::types::BaseType;
+
+    pub(in crate::freertos) const SEND_TO_BACK: BaseType = 0;
+    pub(in crate::freertos) const SEND_TO_FRONT: BaseType = 1;
+    pub(in crate::freertos) const OVERWRITE: BaseType = 2;
+    pub(in crate::freertos) const QUEUE_TYPE_BASE: u8 = 0;
+    pub(in crate::freertos) const QUEUE_TYPE_MUTEX: u8 = 1;
+    pub(in crate::freertos) const QUEUE_TYPE_COUNTING_SEMAPHORE: u8 = 2;
+    pub(in crate::freertos) const QUEUE_TYPE_BINARY_SEMAPHORE: u8 = 3;
+    pub(in crate::freertos) const QUEUE_TYPE_RECURSIVE_MUTEX: u8 = 4;
+}
+
+
+
+
+
+/// Task status information structure.
+///
+/// Contains detailed information about a task's state, priority, stack usage, etc.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub(super) struct TaskStatus {
+    /// Task handle
+    pub(super) xHandle: ThreadHandle,
+    /// Task name (null-terminated C string)
+    pub(super) pcTaskName: *const c_char,
+    /// Task number (unique ID)
+    pub(super) xTaskNumber: UBaseType,
+    /// Current task state
+    pub(super) eCurrentState: TaskState,
+    /// Current priority
+    pub(super) uxCurrentPriority: UBaseType,
+    /// Base priority (before priority inheritance)
+    pub(super) uxBasePriority: UBaseType,
+    /// Total runtime counter
+    pub(super) ulRunTimeCounter: u32,
+    /// Stack base address
+    pub(super) pxStackBase: *mut StackType,
+    /// Stack high water mark (minimum free stack)
+    pub(super) usStackHighWaterMark: StackType
+}
+
+impl Default for TaskStatus {
+    fn default() -> Self {
+        TaskStatus {
+            xHandle: ptr::null(),
+            pcTaskName: ptr::null(),
+            xTaskNumber: 0,
+            eCurrentState: task::INVALID,
+            uxCurrentPriority: 0,
+            uxBasePriority: 0,
+            ulRunTimeCounter: 0,
+            pxStackBase: ptr::null_mut(),
+            usStackHighWaterMark: 0,
+        }
+    }
+}
+
+pub(super) type TaskFunction = Option<unsafe extern "C" fn(arg: *mut c_void)>;
+
+unsafe extern "C" {
+
+    /// Allocate memory from the  heap
+    ///
+    /// # Arguments
+    /// * `size` - The number of bytes to allocate
+    ///
+    /// # Returns
+    /// A pointer to the allocated memory, or null if allocation fails
+    pub(super) fn pvPortMalloc(size: usize) -> *mut c_void;
+
+    /// Free memory previously allocated by pvPortMalloc
+    ///
+    /// # Arguments
+    /// * `pv` - Pointer to the memory to free
+    pub(super) fn vPortFree(pv: *mut c_void);
+
+    pub(super) fn vTaskDelay(xTicksToDelay: TickType);
+
+    pub(super) fn xTaskDelayUntil(
+        pxPreviousWakeTime: *mut TickType,
+        xTimeIncrement: TickType,
+    ) -> BaseType;
+
+
+    pub(super) fn xTaskGetTickCount() -> TickType;
+
+    pub(super) fn vTaskStartScheduler();
+
+    pub(super) fn vTaskEndScheduler();
+
+    pub(super) fn vTaskSuspendAll();
+
+    pub(super) fn xTaskResumeAll() -> BaseType;
+
+    pub(super) fn xTaskGetCurrentTaskHandle() -> ThreadHandle;
+
+    pub(super) fn eTaskGetState(xTask: ThreadHandle) -> TaskState;
+
+    pub(super) fn uxTaskGetNumberOfTasks() -> UBaseType;
+
+    pub(super) fn uxTaskGetSystemState(
+        pxTaskStatusArray: *mut TaskStatus,
+        uxArraySize: UBaseType,
+        pulTotalRunTime: *mut u32,
+    ) -> UBaseType;
+
+    pub(super) fn osal_rs_task_enter_critical();
+    pub(super) fn osal_rs_task_exit_critical();
+
+    pub(super) fn osal_rs_task_enter_critical_from_isr() -> UBaseType;
+    pub(super) fn osal_rs_task_exit_critical_from_isr(uxSavedInterruptStatus: UBaseType);
+
+
+    pub(super) fn xTaskCreate(
+        pxTaskCode: TaskFunction,
+        pcName: *const c_char,
+        uxStackDepth: StackType,
+        pvParameters: *mut c_void,
+        uxPriority: UBaseType,
+        pxCreatedTask: *mut ThreadHandle,
+    ) -> BaseType;
+
+    pub(super) fn vTaskDelete(xTaskToDelete: ThreadHandle);
+
+    pub(super) fn vTaskSuspend(xTaskToSuspend: ThreadHandle);
+
+    pub(super) fn vTaskResume(xTaskToResume: ThreadHandle);
+
+    pub(super) fn vTaskGetInfo(
+        xTask: ThreadHandle,
+        pxTaskStatus: *mut TaskStatus,
+        xGetFreeStackSpace: BaseType,
+        eState: TaskState,
+    );
+
+    // pub fn ulTaskGenericNotifyTake(uxIndexToWaitOn: UBaseType, xClearCountOnExit: BaseType, xTicksToWait: TickType) -> u32;
+
+
+    pub(super) fn xTaskGenericNotifyWait(
+        uxIndexToWaitOn: UBaseType,
+        ulBitsToClearOnEntry: u32,
+        ulBitsToClearOnExit: u32,
+        pulNotificationValue: *mut u32,
+        xTicksToWait: TickType,
+    ) -> BaseType;
+
+
+    pub(super) fn xTaskGenericNotify(
+        xTaskToNotify: ThreadHandle,
+        uxIndexToNotify: UBaseType,
+        ulValue: u32,
+        eAction: u32,
+        pulPreviousNotificationValue: *mut u32,
+    ) -> BaseType;
+
+
+    pub(super) fn xTaskGenericNotifyFromISR(
+        xTaskToNotify: ThreadHandle,
+        uxIndexToNotify: UBaseType,
+        ulValue: u32,
+        eAction: u32,
+        pulPreviousNotificationValue: *mut u32,
+        pxHigherPriorityTaskWoken: *mut BaseType,
+    ) -> BaseType;
+
+    pub(super) fn xEventGroupWaitBits(
+        xEventGroup: EventGroupHandle,
+        uxBitsToWaitFor: EventBits,
+        xClearOnExit: BaseType,
+        xWaitForAllBits: BaseType,
+        xTicksToWait: TickType,
+    ) -> EventBits;
+
+    pub(super) fn xEventGroupClearBits(
+        xEventGroup: EventGroupHandle,
+        uxBitsToClear: EventBits,
+    ) -> EventBits;
+
+    pub(super) fn xEventGroupClearBitsFromISR(
+        xEventGroup: EventGroupHandle,
+        uxBitsToClear: EventBits,
+    ) -> BaseType;
+
+    pub(super) fn xEventGroupSetBits(
+        xEventGroup: EventGroupHandle,
+        uxBitsToSet: EventBits,
+    ) -> EventBits;
+
+
+    pub(super) fn xEventGroupSetBitsFromISR(
+        xEventGroup: EventGroupHandle,
+        uxBitsToSet: EventBits,
+        pxHigherPriorityTaskWoken: *mut BaseType,
+    ) -> BaseType;
+
+    pub(super) fn xEventGroupGetBitsFromISR(xEventGroup: EventGroupHandle) -> EventBits;
+
+    pub(super) fn vEventGroupDelete(xEventGroup: EventGroupHandle);
+
+    pub(super) fn xEventGroupCreate() -> EventGroupHandle;
+
+    pub(super) fn osal_rs_critical_section_enter();
+
+    pub(super) fn osal_rs_critical_section_exit();
+
+    pub(super) fn osal_rs_port_yield_from_isr(pxHigherPriorityTaskWoken: BaseType);
+
+    pub(super) fn osal_rs_port_end_switching_isr( xSwitchRequired: BaseType );
+
+    pub(super) fn xQueueCreateMutex(ucQueueType: u8) -> QueueHandle;
+
+    pub(super) fn xQueueCreateCountingSemaphore(
+        uxMaxCount: UBaseType,
+        uxInitialCount: UBaseType,
+    ) -> QueueHandle;
+
+    pub(super) fn xQueueSemaphoreTake(xQueue: QueueHandle, xTicksToWait: TickType) -> BaseType;
+
+    pub(super) fn xQueueReceiveFromISR(
+        xQueue: QueueHandle,
+        pvBuffer: *mut c_void,
+        pxHigherPriorityTaskWoken: *mut BaseType,
+    ) -> BaseType;
+
+    pub(super) fn xQueueGenericSend(
+        xQueue: QueueHandle,
+        pvItemToQueue: *const c_void,
+        xTicksToWait: TickType,
+        xCopyPosition: BaseType,
+    ) -> BaseType;
+
+    pub(super) fn xQueueGiveFromISR(
+        xQueue: QueueHandle,
+        pxHigherPriorityTaskWoken: *mut BaseType,
+    ) -> BaseType;
+
+    pub(super) fn vQueueDelete(xQueue: QueueHandle);
+
+    pub(super) fn xQueueGenericCreate(
+        uxQueueLength: UBaseType,
+        uxItemSize: UBaseType,
+        ucQueueType: u8,
+    ) -> QueueHandle;
+
+    pub(super) fn xQueueReceive(
+        xQueue: QueueHandle,
+        pvBuffer: *mut c_void,
+        xTicksToWait: TickType,
+    ) -> BaseType;
+
+    pub(super) fn xQueueGenericSendFromISR(
+        xQueue: QueueHandle,
+        pvItemToQueue: *const c_void,
+        pxHigherPriorityTaskWoken: *mut BaseType,
+        xCopyPosition: BaseType,
+    ) -> BaseType;
+
+    pub(super) fn xQueueTakeMutexRecursive(xMutex: QueueHandle, xTicksToWait: TickType) -> BaseType;
+
+    pub(super) fn xQueueGiveMutexRecursive(xMutex: QueueHandle) -> BaseType;
+
+    pub(super) fn xPortGetFreeHeapSize() -> usize;
+
+    // pub fn xTimerCreateTimerTask() -> BaseType;
+
+    pub(super) fn xTimerCreate(
+        pcTimerName: *const c_char,
+        xTimerPeriodInTicks: TickType,
+        xAutoReload: BaseType,
+        pvTimerID: *mut c_void,
+        pxCallbackFunction: Option<TimerCallback>,
+    ) -> TimerHandle;
+
+    pub(super) fn osal_rs_timer_start(xTimer: TimerHandle, xTicksToWait: TickType) -> BaseType;
+
+    pub(super) fn osal_rs_timer_stop(xTimer: TimerHandle, xTicksToWait: TickType) -> BaseType;
+
+    pub(super) fn osal_rs_timer_reset(xTimer: TimerHandle, xTicksToWait: TickType) -> BaseType;
+
+    pub(super) fn osal_rs_timer_change_period(
+        xTimer: TimerHandle,
+        xNewPeriodInTicks: TickType,
+        xTicksToWait: TickType,
+    ) -> BaseType;
+
+    pub(super) fn osal_rs_timer_delete(xTimer: TimerHandle, xTicksToWait: TickType) -> BaseType;
+
+    pub(super) fn pvTimerGetTimerID(xTimer: TimerHandle) -> *mut c_void;
+
+    // pub fn printf(fmt: *const u8, ...) -> i32;
+}
+
+
+macro_rules! xTaskNotifyWait {
+    ($ulBitsToClearOnEntry:expr, $ulBitsToClearOnExit:expr, $pulNotificationValue:expr, $xTicksToWait:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xTaskGenericNotifyWait(
+                $crate::freertos::ffi::tskDEFAULT_INDEX_TO_NOTIFY,
+                $ulBitsToClearOnEntry,
+                $ulBitsToClearOnExit,
+                $pulNotificationValue,
+                $xTicksToWait
+            )
+        }
+    };
+}
+
+macro_rules! xTaskNotify {
+    ($xTaskToNotify:expr, $ulValue:expr, $eAction:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xTaskGenericNotify(
+                $xTaskToNotify,
+                $crate::freertos::ffi::tskDEFAULT_INDEX_TO_NOTIFY,
+                $ulValue,
+                $eAction,
+                core::ptr::null_mut()
+            )
+        }
+    };
+}
+
+macro_rules! xTaskNotifyFromISR {
+    ($xTaskToNotify:expr, $ulValue:expr, $eAction:expr, $pxHigherPriorityTaskWoken:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xTaskGenericNotifyFromISR(
+                $xTaskToNotify,
+                $crate::freertos::ffi::tskDEFAULT_INDEX_TO_NOTIFY,
+                $ulValue,
+                $eAction,
+                core::ptr::null_mut(),
+                $pxHigherPriorityTaskWoken
+            )
+        }
+    };
+}
+
+
+macro_rules! xEventGroupGetBits {
+    ($xEventGroup:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xEventGroupClearBits($xEventGroup, 0)
+        }
+    };
+}
+
+macro_rules! xSemaphoreCreateCounting {
+    ($uxMaxCount:expr, $uxInitialCount:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueCreateCountingSemaphore(
+                $uxMaxCount,
+                $uxInitialCount
+            )
+        }
+    };
+}
+
+macro_rules! xSemaphoreTake {
+    ($xSemaphore:expr, $xBlockTime:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueSemaphoreTake(
+                $xSemaphore,
+                $xBlockTime
+            )
+        }
+    };
+}
+
+macro_rules! xSemaphoreTakeFromISR {
+    ($xSemaphore:expr, $pxHigherPriorityTaskWoken:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueReceiveFromISR(
+                $xSemaphore,
+                core::ptr::null_mut(),
+                $pxHigherPriorityTaskWoken
+            )
+        }
+    };
+}
+
+macro_rules! xSemaphoreGive {
+    ($xSemaphore:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueGenericSend(
+                $xSemaphore,
+                core::ptr::null(),
+                $crate::freertos::ffi::sem::GIVE_BLOCK_TIME,
+                $crate::freertos::ffi::queue::SEND_TO_BACK
+            )
+        }
+    };
+}
+
+macro_rules! xSemaphoreGiveFromISR {
+    ($xSemaphore:expr, $pxHigherPriorityTaskWoken:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueGiveFromISR(
+                $xSemaphore,
+                $pxHigherPriorityTaskWoken
+            )
+        }
+    };
+}
+
+macro_rules! vSemaphoreDelete {
+    ($xSemaphore:expr) => {
+        unsafe {
+            $crate::freertos::ffi::vQueueDelete($xSemaphore)
+        }
+    };
+}
+
+macro_rules! xQueueSendToBackFromISR {
+    ($xQueue:expr, $pvItemToQueue:expr, $pxHigherPriorityTaskWoken:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueGenericSendFromISR(
+                $xQueue,
+                $pvItemToQueue,
+                $pxHigherPriorityTaskWoken,
+                $crate::freertos::ffi::queue::SEND_TO_BACK
+            )
+        }
+    };
+}
+
+macro_rules! xQueueSendToBack {
+    ($xQueue:expr, $pvItemToQueue:expr, $xTicksToWait:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueGenericSend(
+                $xQueue,
+                $pvItemToQueue,
+                $xTicksToWait,
+                $crate::freertos::ffi::queue::SEND_TO_BACK
+            )
+        }
+    };
+}
+
+macro_rules! xSemaphoreCreateRecursiveMutex {
+    () => {
+        unsafe {
+            $crate::freertos::ffi::xQueueCreateMutex(
+                $crate::freertos::ffi::queue::QUEUE_TYPE_RECURSIVE_MUTEX
+            )
+        }
+    };
+}
+
+macro_rules! xSemaphoreTakeRecursive {
+    ($xMutex:expr, $xBlockTime:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueTakeMutexRecursive(
+                $xMutex,
+                $xBlockTime
+            )
+        }
+    };
+}
+
+macro_rules! xSemaphoreGiveRecursive {
+    ($xMutex:expr) => {
+        unsafe {
+            $crate::freertos::ffi::xQueueGiveMutexRecursive($xMutex)
+        }
+    };
+}

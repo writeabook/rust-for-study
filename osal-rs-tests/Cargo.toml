@@ -1,0 +1,20 @@
+[package]
+name = "osal-rs-tests"
+version = "0.1.0"
+edition = "2024"
+authors = ["Antonio Salsi"]
+description = "Test suite for osal-rs"
+license = "LGPL-2.1-or-later"
+repository = "https://github.com/antoniosalsi/osal-rs"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["freertos"]
+freertos = ["osal-rs/freertos"]
+serde = ["osal-rs/serde"]
+
+[dependencies]
+osal-rs = { version = "0.5", path = "../osal-rs" }

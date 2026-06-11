@@ -1,0 +1,47 @@
+[package]
+name = "osal-rs"
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.85.0"
+authors = ["Antonio Salsi"]
+description = "Operating System Abstraction Layer for Rust with support for FreeRTOS and POSIX"
+license = "LGPL-2.1-or-later"
+repository = "https://github.com/HiHappyGarden/osal-rs"
+homepage = "https://github.com/HiHappyGarden/osal-rs"
+documentation = "https://docs.rs/osal-rs"
+readme = "../README.md"
+keywords = ["os", "rtos", "freertos", "embedded", "posix"]
+categories = ["embedded", "no-std", "os"]
+exclude = [
+    "target/",
+    ".git/",
+    ".github/",
+    "*.swp",
+    "*.swo",
+]
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+
+[features]
+default = ["freertos"]
+freertos = []
+posix = []
+std = ["disable_panic"]
+disable_panic = []
+serde = ["osal-rs-serde"]
+
+
+[dependencies]
+osal-rs-serde = { version = "0.5", path = "../osal-rs-serde", features = ["derive"], optional = true }
+
+[build-dependencies]
+osal-rs-build = { version = "0.5", path = "../osal-rs-build" }
+
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

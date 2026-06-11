@@ -1,0 +1,61 @@
+[package]
+name = "osal-rs-serde"
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.85.0"
+authors = ["Antonio Salsi"]
+description = "Serialization/Deserialization framework for osal-rs - extensible and reusable"
+license = "LGPL-2.1-or-later"
+repository = "https://github.com/HiHappyGarden/osal-rs"
+homepage = "https://github.com/HiHappyGarden/osal-rs"
+documentation = "https://docs.rs/osal-rs-serde"
+keywords = ["serialization", "deserialization", "no-std", "embedded"]
+categories = ["embedded", "no-std", "encoding"]
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = ["alloc"]
+alloc = []
+std = ["alloc"]
+derive = ["osal-rs-serde-derive"]
+
+[dependencies]
+osal-rs-serde-derive = { version = "0.5", path = "derive", optional = true }
+
+[[example]]
+name = "basic"
+required-features = []
+
+[[example]]
+name = "with_derive"
+required-features = ["derive"]
+
+[[example]]
+name = "custom_serializer"
+required-features = ["derive"]
+
+[[example]]
+name = "integration"
+required-features = ["derive"]
+
+[[example]]
+name = "arrays_tuples"
+required-features = ["derive"]
+
+[[example]]
+name = "nested_structs"
+required-features = ["derive"]
+
+[[example]]
+name = "optional_fields"
+required-features = ["derive"]
+
+[[example]]
+name = "robot_control"
+required-features = ["derive"]
+
+[[test]]
+name = "integration_tests"
+required-features = ["derive"]
