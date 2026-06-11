@@ -225,6 +225,9 @@ extern crate alloc;
 #[cfg(all(feature = "posix", not(feature = "std")))]
 compile_error!("The `posix` backend requires the `std` feature.");
 
+#[cfg(all(feature = "linux", not(feature = "std")))]
+compile_error!("The `linux` backend requires the `std` feature.");
+
 #[cfg(not(any(feature = "freertos", feature = "std")))]
 compile_error!("Enable either the `freertos` backend or the `std` host backend.");
 
@@ -243,8 +246,17 @@ mod freertos;
 /// Currently under development.
 ///
 /// Enabled with the `posix` feature flag.
-#[cfg(all(feature = "std", not(feature = "freertos")))]
+#[cfg(all(feature = "std", not(feature = "freertos"), not(feature = "linux")))]
 mod posix;
+
+/// Linux OSAL backend (planned).
+///
+/// This module will contain the Linux-specific OSAL implementation.
+/// Currently reserved for future development.
+///
+/// Enabled with the `linux` feature flag.
+#[cfg(all(feature = "linux", not(feature = "freertos"), not(feature = "posix")))]
+mod linux;
 
 pub mod log;
 
@@ -261,8 +273,12 @@ pub mod utils;
 use crate::freertos as osal;
 
 /// Select POSIX as the active OSAL backend.
-#[cfg(all(feature = "std", not(feature = "freertos")))]
+#[cfg(all(feature = "std", not(feature = "freertos"), not(feature = "linux")))]
 use crate::posix as osal;
+
+/// Select Linux as the active OSAL backend (reserved for future development).
+#[cfg(all(feature = "linux", not(feature = "freertos"), not(feature = "posix")))]
+use crate::linux as osal;
 
 /// Main OSAL module re-exporting all OS abstractions and traits.
 ///
@@ -293,6 +309,7 @@ use crate::posix as osal;
 ///     System::start();
 /// }
 /// ```
+#[cfg(not(feature = "linux"))]
 pub mod os {
 
     #[cfg(all(not(feature = "disable_panic"), feature = "freertos"))]
@@ -369,6 +386,19 @@ pub mod os {
     /// Type aliases and common types used throughout OSAL.
     pub use crate::osal::types as types;
 
+}
+
+/// OSAL module for Linux backend (reserved for future development).
+///
+/// Provides a minimal `os` module so that trait code continues to compile
+/// while the Linux backend is under development.
+#[cfg(feature = "linux")]
+pub mod os {
+    pub use crate::traits::*;
+    pub use crate::linux::types as types;
+    pub use crate::linux::config as config;
+    pub use crate::linux::system::{System, SystemState};
+    pub use crate::linux::thread::{ThreadState, ThreadMetadata};
 }
 
 /// Default panic handler for `no_std` environments.
