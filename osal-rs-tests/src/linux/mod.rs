@@ -11,6 +11,11 @@ fn test_run_all_tests_system() {
 }
 
 #[test]
+fn test_run_all_tests_mutex() {
+    crate::common::mutex_tests::run_all_tests().unwrap();
+}
+
+#[test]
 fn test_system_get_tick_count() {
     crate::common::system_tests::test_system_get_tick_count().unwrap();
 }

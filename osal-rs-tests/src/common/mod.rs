@@ -7,7 +7,6 @@ pub mod duration_tests;
 pub mod api_surface;
 #[cfg(feature = "freertos")]
 pub mod event_group_tests;
-#[cfg(feature = "freertos")]
 pub mod mutex_tests;
 #[cfg(feature = "freertos")]
 pub mod queue_tests;
