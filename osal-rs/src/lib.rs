@@ -400,6 +400,7 @@ pub mod os {
     pub use crate::linux::system::{System, SystemState};
     pub use crate::linux::thread::{ThreadState, ThreadMetadata};
     pub use crate::linux::mutex::*;
+    pub use crate::linux::semaphore::*;
 }
 
 /// Default panic handler for `no_std` environments.

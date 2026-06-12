@@ -44,4 +44,5 @@ pub mod types;
 pub(crate) mod duration;
 pub mod system;
 pub mod mutex;
+pub mod semaphore;
 pub mod thread;
