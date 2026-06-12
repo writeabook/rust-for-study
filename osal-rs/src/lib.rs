@@ -403,6 +403,8 @@ pub mod os {
     pub use crate::linux::semaphore::*;
     #[allow(unused_imports)]
     pub use crate::linux::event_group::*;
+    #[allow(unused_imports)]
+    pub use crate::linux::queue::*;
 }
 
 /// Default panic handler for `no_std` environments.

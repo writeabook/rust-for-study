@@ -47,3 +47,4 @@ pub mod mutex;
 pub mod semaphore;
 pub mod event_group;
 pub mod thread;
+pub mod queue;
