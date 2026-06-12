@@ -40,9 +40,9 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::Instant;
 
-use crate::linux::config::TICK_PERIOD_MS;
-use crate::linux::thread::{ThreadMetadata, ThreadState};
-use crate::linux::types::{BaseType, TickType, UBaseType};
+use super::config::TICK_PERIOD_MS;
+use super::thread::{ThreadMetadata, ThreadState};
+use super::types::{BaseType, TickType, UBaseType};
 use crate::traits::{SystemFn, ToTick};
 use crate::utils::OsalRsBool;
 

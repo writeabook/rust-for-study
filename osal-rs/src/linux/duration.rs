@@ -30,8 +30,8 @@
 
 use core::time::Duration;
 
-use crate::linux::config::TICK_PERIOD_MS;
-use crate::linux::types::TickType;
+use super::config::TICK_PERIOD_MS;
+use super::types::TickType;
 use crate::traits::{FromTick, ToTick};
 
 impl ToTick for Duration {
