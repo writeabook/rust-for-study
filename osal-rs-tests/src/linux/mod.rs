@@ -25,6 +25,11 @@ fn test_run_all_tests_event_group() {
     crate::common::event_group_tests::run_all_tests().unwrap();
 }
 
+#[test]
+fn test_run_all_tests_queue() {
+    crate::common::queue_tests::run_all_tests().unwrap();
+}
+
 // #[test]
 // fn test_system_get_tick_count() {
 //     crate::common::system_tests::test_system_get_tick_count().unwrap();

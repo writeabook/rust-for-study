@@ -154,3 +154,53 @@
 | **Function** | `EventGroup::delete` / `Drop` → `vEventGroupDelete` | `EventGroup::delete` / `Drop` — empty body |
 | **Behavior** | FreeRTOS deallocates the kernel event group object and sets the handle to null. | Linux has no kernel resources to free; Rust reclaims the `StdMutex` + `Condvar` memory automatically. |
 | **Mitigation** | N/A. | Documented no-op.  Application code should not rely on `delete()` for synchronization. |
+
+---
+
+## 16. Queue — ISR Context Switch
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Queue::fetch_from_isr` → `xQueueReceiveFromISR` + `System::yield_from_isr` / `Queue::post_from_isr` → `xQueueSendToBackFromISR` + `System::yield_from_isr` | `Queue::fetch_from_isr` / `Queue::post_from_isr` → `StdMutex::try_lock` |
+| **Behavior** | On success, signals the scheduler to perform a context switch so a higher-priority task runs immediately after the ISR. | Pure try-lock with no context switch. |
+| **Mitigation** | Built into the kernel. | Linux has no ISR context; `_from_isr` variants are semantically correct as non-blocking try-lock operations. |
+
+---
+
+## 17. Queue — Message Storage Strategy
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Queue::new` → `xQueueGenericCreate` / `Queue::post` → `xQueueSendToBack` | `Queue::new` → `StdMutex<VecDeque<Vec<u8>>>` / `Queue::post` → `item.to_vec()` + `push_back` |
+| **Behavior** | FreeRTOS pre-allocates a fixed-size kernel buffer at creation time.  Messages are memcpy'd into pre-allocated slots — no per-message heap allocation. | Messages are cloned into new `Vec<u8>` heap allocations on every `post()`.  The `VecDeque` dynamically grows/shrinks within the capacity limit. |
+| **Mitigation** | N/A. | The functional contract is identical — both guarantee in-order delivery and bounded capacity.  For latency-sensitive workloads, allocate the queue once and reuse it; the heap overhead is negligible in development/test.  Deploy to FreeRTOS for deterministic memory behavior. |
+
+---
+
+## 18. Queue — Wake Strategy (Priority-Ordered Unblocking)
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Queue::fetch` / `Queue::post` → internal `xQueueGenericSend` / `xQueueGenericReceive` | `Queue::fetch` / `Queue::post` → `Condvar::notify_one` |
+| **Behavior** | When a message is posted, FreeRTOS unblocks the **highest-priority** task waiting on the queue.  When a message is fetched, the highest-priority blocked sender is woken. | `Condvar::notify_one` wakes one waiter in OS-scheduler-dependent order (typically FIFO, not priority).  Thread priorities on Linux are informational only. |
+| **Mitigation** | Built into the kernel. | The wake order does not impact correctness for development/test workloads.  Deploy to FreeRTOS for priority-ordered wake-up. |
+
+---
+
+## 19. Queue — Resource Destruction
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Queue::delete` / `Drop` → `vQueueDelete` + set handle to null | `Queue::delete` / `Drop` → set `closed` flag + `Condvar::notify_all` |
+| **Behavior** | FreeRTOS frees the kernel queue object and sets the handle pointer to null.  Any task blocked on the queue is unblocked. | Linux sets a `closed` flag and notifies all waiting threads so they unblock with `Error::Timeout`.  Rust reclaims the `StdMutex` + `Condvar` + `VecDeque` memory when `self` is dropped. |
+| **Mitigation** | N/A. | Both backends unblock waiting tasks and reclaim resources.  Application code should not rely on post-deletion behavior beyond the contract. |
+
+---
+
+## 20. Queue — Copy In/Out vs In-Place Deserialization
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `QueueStreamed<T>::fetch` → deserialize from `Vec<u8>` using `T::from_bytes` | `QueueStreamed<T>::fetch` → deserialize from `Vec<u8>` using `T::from_bytes` (or serde) |
+| **Behavior** | Both backends allocate a temporary `Vec<u8>` for the raw message, then deserialize into the caller's `&mut T` buffer.  The OSAL contract requires message-size consistency — the `Vec` capacity equals `T::len()`. | Identical logic.  The Linux backend explicitly copies from `VecDeque<Vec<u8>>` (which already contains a `Vec<u8>`) into the temporary `Vec`, then deserializes — one extra copy compared to the FreeRTOS kernel's direct memcpy from its internal buffer. |
+| **Mitigation** | N/A. | The extra copy is negligible for development/test workloads and does not affect the public API contract.  Both backends pass the same test suite. |

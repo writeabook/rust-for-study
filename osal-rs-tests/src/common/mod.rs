@@ -9,7 +9,6 @@ pub mod event_group_tests;
 // as each module is implemented.
 #[cfg(feature = "freertos")]
 pub mod api_surface;
-#[cfg(feature = "freertos")]
 pub mod queue_tests;
 #[cfg(feature = "freertos")]
 pub mod thread_tests;
