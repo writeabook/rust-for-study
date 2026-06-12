@@ -43,7 +43,7 @@ use std::time::Instant;
 use crate::linux::config::TICK_PERIOD_MS;
 use crate::linux::thread::{ThreadMetadata, ThreadState};
 use crate::linux::types::{BaseType, TickType, UBaseType};
-use crate::traits::ToTick;
+use crate::traits::{SystemFn, ToTick};
 use crate::utils::OsalRsBool;
 
 // ---------------------------------------------------------------------------
@@ -405,5 +405,95 @@ impl System {
     /// the process can allocate as much as the OS permits.
     pub fn get_free_heap_size() -> usize {
         usize::MAX
+    }
+}
+
+impl SystemFn for System {
+    fn start() {
+        Self::start();
+    }
+
+    fn get_state() -> ThreadState {
+        Self::get_state()
+    }
+
+    fn suspend_all() {
+        Self::suspend_all();
+    }
+
+    fn resume_all() -> BaseType {
+        Self::resume_all()
+    }
+
+    fn stop() {
+        Self::stop();
+    }
+
+    fn get_tick_count() -> TickType {
+        Self::get_tick_count()
+    }
+
+    fn get_current_time_us() -> Duration {
+        Self::get_current_time_us()
+    }
+
+    fn get_us_from_tick(duration: &Duration) -> TickType {
+        Self::get_us_from_tick(duration)
+    }
+
+    fn count_threads() -> usize {
+        Self::count_threads()
+    }
+
+    fn get_all_thread() -> SystemState {
+        Self::get_all_thread()
+    }
+
+    fn delay(ticks: TickType) {
+        Self::delay(ticks);
+    }
+
+    fn delay_until(previous_wake_time: &mut TickType, time_increment: TickType) {
+        Self::delay_until(previous_wake_time, time_increment);
+    }
+
+    fn critical_section_enter() {
+        Self::critical_section_enter();
+    }
+
+    fn critical_section_exit() {
+        Self::critical_section_exit();
+    }
+
+    fn check_timer(timestamp: &Duration, time: &Duration) -> OsalRsBool {
+        Self::check_timer(timestamp, time)
+    }
+
+    fn yield_from_isr(higher_priority_task_woken: BaseType) {
+        Self::yield_from_isr(higher_priority_task_woken);
+    }
+
+    fn end_switching_isr(switch_required: BaseType) {
+        Self::end_switching_isr(switch_required);
+    }
+
+    fn enter_critical() {
+        Self::enter_critical();
+    }
+
+    fn exit_critical() {
+        Self::exit_critical();
+    }
+
+    fn enter_critical_from_isr() -> UBaseType {
+        Self::enter_critical_from_isr()
+    }
+
+    fn exit_critical_from_isr(saved_interrupt_status: UBaseType) {
+        Self::exit_critical_from_isr(saved_interrupt_status);
+    }
+
+    fn get_free_heap_size() -> usize {
+        Self::get_free_heap_size()
     }
 }
