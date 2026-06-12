@@ -399,6 +399,7 @@ pub mod os {
     pub use crate::linux::config as config;
     pub use crate::linux::system::{System, SystemState};
     pub use crate::linux::thread::{ThreadState, ThreadMetadata};
+    pub use crate::linux::mutex::*;
 }
 
 /// Default panic handler for `no_std` environments.
