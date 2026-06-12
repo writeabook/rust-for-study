@@ -8,7 +8,6 @@ pub mod semaphore_tests;
 // as each module is implemented.
 #[cfg(feature = "freertos")]
 pub mod api_surface;
-#[cfg(feature = "freertos")]
 pub mod event_group_tests;
 #[cfg(feature = "freertos")]
 pub mod queue_tests;

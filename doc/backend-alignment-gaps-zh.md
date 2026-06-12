@@ -113,3 +113,43 @@
 | **函数** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` 返回 `usize::MAX` |
 | **行为** | FreeRTOS 预分配固定大小的堆，`get_free_heap_size` 返回可用字节数——对象创建可能因 `OutOfMemory` 失败。 | Linux 提供虚拟内存；Rust 分配几乎永不失败。 |
 | **缓解措施** | 不适用。 | `RawMutex::new` 使用 `unwrap()`。测试分配失败需额外 `#[cfg]` 端点。可在未来的版本中添加。 |
+
+---
+
+## 12. EventGroup — ISR 上下文切换
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `EventGroup::set_from_isr` → `xEventGroupSetBitsFromISR` + `System::yield_from_isr` | `EventGroup::set_from_isr` → `StdMutex::try_lock` + `Condvar::notify_all` |
+| **行为** | 成功后通知调度器进行上下文切换，让被位设置解除阻塞的更高优先级任务立即运行。 | 纯非阻塞位设置，无上下文切换。 |
+| **缓解措施** | 内置于内核。 | Linux 无 ISR 上下文；`set_from_isr` 作为非阻塞操作语义正确。 |
+
+---
+
+## 13. EventGroup — ISR 锁忙行为
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `EventGroup::get_from_isr` → `xEventGroupGetBitsFromISR` | `EventGroup::get_from_isr` → `StdMutex::try_lock` |
+| **行为** | FreeRTOS 提供直接 ISR 安全读取，始终返回当前位，无论事件组是否被锁定。 | Linux 使用 `StdMutex::try_lock`——如果另一个线程持有锁，`get_from_isr` 返回 `0`（静默回退）。 |
+| **缓解措施** | 不适用。 | Linux 无 ISR 上下文；`get_from_isr` 方法仅供信息用途。应用代码应使用 `get()` 进行关键读取。 |
+
+---
+
+## 14. EventGroup — 唤醒策略
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `EventGroup::set` → `xEventGroupSetBits` | `EventGroup::set` → `StdMutex::lock` + `Condvar::notify_all` |
+| **行为** | FreeRTOS 仅唤醒其条件被新设置的位**满足**的等待者（精确唤醒）。 | Linux 通过 `notify_all()` 唤醒**所有**等待线程——条件尚未满足的线程将检查并重新进入 `Condvar::wait_timeout`。 |
+| **缓解措施** | 内置于内核。 | 虚假唤醒由检查等待条件的循环处理。额外的唤醒会增加微小开销，但功能上正确。 |
+
+---
+
+## 15. EventGroup — 资源销毁
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `EventGroup::delete` / `Drop` → `vEventGroupDelete` | `EventGroup::delete` / `Drop` — 空函数体 |
+| **行为** | FreeRTOS 释放内核事件组对象并将句柄设为 null。 | Linux 无内核资源需释放；Rust 自动回收 `StdMutex` + `Condvar` 内存。 |
+| **缓解措施** | 不适用。 | 已文档化为无操作。应用代码不应依赖 `delete()` 进行同步。 |

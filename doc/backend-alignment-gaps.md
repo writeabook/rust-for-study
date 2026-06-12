@@ -114,3 +114,43 @@
 | **Function** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` returns `usize::MAX` |
 | **Behavior** | FreeRTOS pre-allocates a fixed-size heap; `get_free_heap_size` reports remaining bytes — object creation can fail with `OutOfMemory`. | Linux provides virtual memory; Rust allocations almost never fail. |
 | **Mitigation** | N/A. | `RawMutex::new` uses `unwrap()`.  Testing allocation failure would require additional `#[cfg]` endpoints.  Can be added in a future release. |
+
+---
+
+## 12. EventGroup — ISR Context Switch
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `EventGroup::set_from_isr` → `xEventGroupSetBitsFromISR` + `System::yield_from_isr` | `EventGroup::set_from_isr` → `StdMutex::try_lock` + `Condvar::notify_all` |
+| **Behavior** | On success, signals the scheduler to perform a context switch so a higher-priority task unblocked by the bit-set runs immediately. | Pure non-blocking bit-set with no context switch. |
+| **Mitigation** | Built into the kernel. | Linux has no ISR context; `set_from_isr` is semantically correct as a non-blocking operation. |
+
+---
+
+## 13. EventGroup — ISR Busy-Lock Behavior
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `EventGroup::get_from_isr` → `xEventGroupGetBitsFromISR` | `EventGroup::get_from_isr` → `StdMutex::try_lock` |
+| **Behavior** | FreeRTOS provides a direct ISR-safe read that always returns the current bits, regardless of whether the event group is locked. | Linux uses `StdMutex::try_lock` — if another thread holds the lock, `get_from_isr` returns `0` (silent fallback). |
+| **Mitigation** | N/A. | Linux has no ISR context; the `get_from_isr` method is informational only.  Application code should use `get()` for critical reads. |
+
+---
+
+## 14. EventGroup — Wake Strategy
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `EventGroup::set` → `xEventGroupSetBits` | `EventGroup::set` → `StdMutex::lock` + `Condvar::notify_all` |
+| **Behavior** | FreeRTOS wakes only the waiters whose conditions are **satisfied** by the newly-set bits (precise wake-up). | Linux wakes **all** waiting threads via `notify_all()` — threads whose condition is not yet satisfied will check and re-enter `Condvar::wait_timeout`. |
+| **Mitigation** | Built into the kernel. | Spurious wake-ups are handled by a loop checking the wait condition.  The extra wake-ups add minor overhead but are functionally correct. |
+
+---
+
+## 15. EventGroup — Resource Destruction
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `EventGroup::delete` / `Drop` → `vEventGroupDelete` | `EventGroup::delete` / `Drop` — empty body |
+| **Behavior** | FreeRTOS deallocates the kernel event group object and sets the handle to null. | Linux has no kernel resources to free; Rust reclaims the `StdMutex` + `Condvar` memory automatically. |
+| **Mitigation** | N/A. | Documented no-op.  Application code should not rely on `delete()` for synchronization. |
