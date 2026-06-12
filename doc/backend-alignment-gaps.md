@@ -87,7 +87,27 @@
 
 ---
 
-## 9. Memory — Heap Allocation
+## 9. Semaphore — ISR Context Switch
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Semaphore::wait_from_isr` / `Semaphore::signal_from_isr` → `xSemaphoreTakeFromISR` / `xSemaphoreGiveFromISR` + `System::yield_from_isr` | `Semaphore::wait_from_isr` / `Semaphore::signal_from_isr` → `StdMutex::try_lock` + count logic |
+| **Behavior** | On success, signals the scheduler to perform a context switch so a higher-priority task runs immediately after the ISR. | Pure non-blocking operations with no context switch. |
+| **Mitigation** | Built into the kernel. | Linux has no ISR context; `_from_isr` variants are correct as non-blocking try-lock operations. |
+
+---
+
+## 10. Semaphore — Highest-Priority Waiter Unblocking
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Semaphore::signal` → `xSemaphoreGive` | `Semaphore::signal` → `Condvar::notify_one` |
+| **Behavior** | FreeRTOS unblocks the **highest-priority** task waiting on the semaphore. | `Condvar::notify_one` wakes one waiter in FIFO order (or arbitrary ordering depending on the OS scheduler). |
+| **Mitigation** | Built into the kernel. | On Linux thread priorities are informational only; the order of wake-up does not impact correctness for development/test workloads.  Deploy to FreeRTOS for priority-ordered wake-up. |
+
+---
+
+## 11. Memory — Heap Allocation
 
 | | FreeRTOS | Linux |
 |---|---|---|

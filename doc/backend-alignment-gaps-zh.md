@@ -86,7 +86,27 @@
 
 ---
 
-## 9. Memory — 堆分配
+## 9. Semaphore — ISR 上下文切换
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Semaphore::wait_from_isr` / `Semaphore::signal_from_isr` → `xSemaphoreTakeFromISR` / `xSemaphoreGiveFromISR` + `System::yield_from_isr` | `Semaphore::wait_from_isr` / `Semaphore::signal_from_isr` → `StdMutex::try_lock` + 计数逻辑 |
+| **行为** | ISR 成功后通知调度器进行上下文切换，让更高优先级任务立即运行。 | 纯非阻塞操作，无上下文切换。 |
+| **缓解措施** | 内置于内核。 | Linux 无 ISR 上下文，`_from_isr` 变体作为非阻塞 try-lock 操作语义正确。 |
+
+---
+
+## 10. Semaphore — 最高优先级等待者唤醒
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Semaphore::signal` → `xSemaphoreGive` | `Semaphore::signal` → `Condvar::notify_one` |
+| **行为** | FreeRTOS 唤醒等待信号量的**最高优先级**任务。 | `Condvar::notify_one` 按 FIFO 顺序唤醒一个等待者（或根据操作系统调度器的任意顺序）。 |
+| **缓解措施** | 内置于内核。 | Linux 上线程优先级仅作信息用途；唤醒顺序不影响开发/测试的正确性。需要优先级顺序唤醒时部署至 FreeRTOS。 |
+
+---
+
+## 11. Memory — 堆分配
 
 | | FreeRTOS | Linux |
 |---|---|---|
