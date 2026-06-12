@@ -401,6 +401,8 @@ pub mod os {
     pub use crate::linux::thread::{ThreadState, ThreadMetadata};
     pub use crate::linux::mutex::*;
     pub use crate::linux::semaphore::*;
+    #[allow(unused_imports)]
+    pub use crate::linux::event_group::*;
 }
 
 /// Default panic handler for `no_std` environments.

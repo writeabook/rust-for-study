@@ -45,4 +45,5 @@ pub(crate) mod duration;
 pub mod system;
 pub mod mutex;
 pub mod semaphore;
+pub mod event_group;
 pub mod thread;
