@@ -17,6 +17,13 @@
 //! - **RAII**: `Drop` calls `delete()` which sets the closed flag and
 //!   notifies all waiters.
 //!
+//! # Fixed-length message contract
+//!
+//! Each slot in the queue stores exactly `message_size` bytes.  Senders
+//! MUST provide a slice of length `message_size`; receivers MUST provide
+//! a buffer of length `message_size`.  Violations return
+//! [`Error::InvalidMessageSize`] immediately, without modifying queue state.
+//!
 //! # Contract
 //!
 //! See `doc/osal-contact-zh.md` §7 for the detailed behavioural
@@ -39,7 +46,7 @@ use crate::os::Deserialize;
 use crate::traits::{BytesHasLen, Serialize};
 
 #[cfg(feature = "serde")]
-use osal_rs_serde::{Deserialize, Serialize, to_bytes as serde_to_bytes};
+use osal_rs_serde::{Deserialize, Serialize, from_bytes as serde_from_bytes, to_bytes as serde_to_bytes};
 
 use crate::traits::{QueueFn, QueueStreamedFn, ToTick};
 use super::types::{QueueHandle, TickType, UBaseType};
@@ -73,6 +80,19 @@ struct QueueInner {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: validate message / buffer size against the queue's message_size
+// ---------------------------------------------------------------------------
+
+#[inline]
+fn validate_message_size(expected: usize, actual: usize) -> Result<()> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(Error::InvalidMessageSize)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Queue — byte-based FIFO queue
 // ---------------------------------------------------------------------------
 
@@ -85,6 +105,13 @@ struct QueueInner {
 /// Internally uses `VecDeque<Vec<u8>>` with a `Mutex` + `Condvar` for
 /// thread-safe, blocking FIFO semantics.
 ///
+/// # Fixed-length messages
+///
+/// The queue enforces that every posted slice and every receive buffer
+/// has exactly the length specified by `message_size` at creation time.
+/// Providing a different length returns `Error::InvalidMessageSize`
+/// without modifying queue state.
+///
 /// # Examples
 ///
 /// ```ignore
@@ -95,13 +122,12 @@ struct QueueInner {
 /// let queue = Queue::new(10, 32).unwrap();
 ///
 /// // Send data
-/// let data = [1u8, 2, 3, 4];
+/// let data = [1u8; 32];
 /// queue.post(&data, Duration::from_millis(100).to_ticks()).unwrap();
 ///
 /// // Receive data
-/// let mut buffer = [0u8; 4];
+/// let mut buffer = [0u8; 32];
 /// queue.fetch(&mut buffer, Duration::from_millis(100).to_ticks()).unwrap();
-/// assert_eq!(buffer, [1, 2, 3, 4]);
 /// ```
 pub struct Queue {
     inner: StdMutex<QueueInner>,
@@ -212,13 +238,15 @@ impl QueueFn for Queue {
     ///
     /// # Arguments
     ///
-    /// * `buffer` — Mutable byte slice to receive data into.
+    /// * `buffer` — Mutable byte slice to receive data into. Must have length
+    ///   equal to the queue's `message_size`.
     /// * `time` — Timeout in system ticks (0 = no wait, MAX = wait forever).
     ///
     /// # Returns
     ///
     /// * `Ok(())` — Data successfully received into buffer.
     /// * `Err(Error::Timeout)` — No data available within timeout period.
+    /// * `Err(Error::InvalidMessageSize)` — `buffer.len() != message_size`.
     ///
     /// # Examples
     ///
@@ -237,10 +265,12 @@ impl QueueFn for Queue {
     fn fetch(&self, buffer: &mut [u8], time: TickType) -> Result<()> {
         let mut state = self.inner.lock().unwrap();
 
+        validate_message_size(state.message_size, buffer.len())?;
+
         // Fast path: data available — dequeue and return.
         if let Some(item) = state.buffer.pop_front() {
-            let len = item.len().min(buffer.len());
-            buffer[..len].copy_from_slice(&item[..len]);
+            debug_assert_eq!(item.len(), state.message_size);
+            buffer.copy_from_slice(&item);
             self.condvar.notify_one(); // wake a potential blocked sender
             return Ok(());
         }
@@ -274,8 +304,8 @@ impl QueueFn for Queue {
             }
 
             if let Some(item) = state.buffer.pop_front() {
-                let len = item.len().min(buffer.len());
-                buffer[..len].copy_from_slice(&item[..len]);
+                debug_assert_eq!(item.len(), state.message_size);
+                buffer.copy_from_slice(&item);
                 self.condvar.notify_one(); // wake a potential blocked sender
                 return Ok(());
             }
@@ -290,18 +320,22 @@ impl QueueFn for Queue {
     ///
     /// # Arguments
     ///
-    /// * `buffer` — Mutable byte slice to receive data into.
+    /// * `buffer` — Mutable byte slice to receive data into. Must have length
+    ///   equal to the queue's `message_size`.
     ///
     /// # Returns
     ///
     /// * `Ok(())` — Data successfully received.
     /// * `Err(Error::Timeout)` — Queue is empty or lock busy.
+    /// * `Err(Error::InvalidMessageSize)` — `buffer.len() != message_size`.
     fn fetch_from_isr(&self, buffer: &mut [u8]) -> Result<()> {
         match self.inner.try_lock() {
             Ok(mut state) => {
+                validate_message_size(state.message_size, buffer.len())?;
+
                 if let Some(item) = state.buffer.pop_front() {
-                    let len = item.len().min(buffer.len());
-                    buffer[..len].copy_from_slice(&item[..len]);
+                    debug_assert_eq!(item.len(), state.message_size);
+                    buffer.copy_from_slice(&item);
                     self.condvar.notify_one();
                     Ok(())
                 } else {
@@ -319,13 +353,15 @@ impl QueueFn for Queue {
     ///
     /// # Arguments
     ///
-    /// * `item` — Byte slice to send.
+    /// * `item` — Byte slice to send. Must have length equal to the queue's
+    ///   `message_size`.
     /// * `time` — Timeout in system ticks (0 = no wait, MAX = wait forever).
     ///
     /// # Returns
     ///
     /// * `Ok(())` — Data successfully sent.
     /// * `Err(Error::Timeout)` — Queue full, could not send within timeout.
+    /// * `Err(Error::InvalidMessageSize)` — `item.len() != message_size`.
     ///
     /// # Examples
     ///
@@ -333,7 +369,7 @@ impl QueueFn for Queue {
     /// use osal_rs::os::{Queue, QueueFn};
     ///
     /// let queue = Queue::new(5, 16).unwrap();
-    /// let data = [0xAA, 0xBB, 0xCC, 0xDD];
+    /// let data = [0xAA; 16];
     ///
     /// // Wait up to 1000 ticks to send
     /// queue.post(&data, 1000)?;
@@ -341,10 +377,11 @@ impl QueueFn for Queue {
     fn post(&self, item: &[u8], time: TickType) -> Result<()> {
         let mut state = self.inner.lock().unwrap();
 
+        validate_message_size(state.message_size, item.len())?;
+
         // Fast path: queue not full — push and return.
         if state.buffer.len() < state.capacity {
-            let msg = item.to_vec();
-            state.buffer.push_back(msg);
+            state.buffer.push_back(item.to_vec());
             self.condvar.notify_one(); // wake a potential blocked receiver
             return Ok(());
         }
@@ -377,8 +414,7 @@ impl QueueFn for Queue {
             }
 
             if state.buffer.len() < state.capacity {
-                let msg = item.to_vec();
-                state.buffer.push_back(msg);
+                state.buffer.push_back(item.to_vec());
                 self.condvar.notify_one(); // wake a potential blocked receiver
                 return Ok(());
             }
@@ -394,18 +430,21 @@ impl QueueFn for Queue {
     ///
     /// # Arguments
     ///
-    /// * `item` — Byte slice to send.
+    /// * `item` — Byte slice to send. Must have length equal to the queue's
+    ///   `message_size`.
     ///
     /// # Returns
     ///
     /// * `Ok(())` — Data successfully sent.
     /// * `Err(Error::Timeout)` — Queue is full or lock busy.
+    /// * `Err(Error::InvalidMessageSize)` — `item.len() != message_size`.
     fn post_from_isr(&self, item: &[u8]) -> Result<()> {
         match self.inner.try_lock() {
             Ok(mut state) => {
+                validate_message_size(state.message_size, item.len())?;
+
                 if state.buffer.len() < state.capacity {
-                    let msg = item.to_vec();
-                    state.buffer.push_back(msg);
+                    state.buffer.push_back(item.to_vec());
                     self.condvar.notify_one();
                     Ok(())
                 } else {
@@ -610,16 +649,13 @@ where
     ///
     /// * `Ok(())` — Message successfully received and deserialized.
     /// * `Err(Error::Timeout)` — Queue empty or timeout.
+    /// * `Err(Error::InvalidMessageSize)` — Buffer length mismatch.
     /// * `Err(Error)` — Deserialization error.
     fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(buffer.len());
-
-        if let Ok(()) = self.0.fetch(&mut buf_bytes, time) {
-            *buffer = T::from_bytes(&buf_bytes)?;
-            Ok(())
-        } else {
-            Err(Error::Timeout)
-        }
+        let mut buf_bytes = vec![0u8; buffer.len()];
+        self.0.fetch(&mut buf_bytes, time)?;
+        *buffer = T::from_bytes(&buf_bytes)?;
+        Ok(())
     }
 
     /// Receives a typed message from ISR context (without serde feature).
@@ -634,16 +670,13 @@ where
     ///
     /// * `Ok(())` — Message successfully received and deserialized.
     /// * `Err(Error::Timeout)` — Queue is empty.
+    /// * `Err(Error::InvalidMessageSize)` — Buffer length mismatch.
     /// * `Err(Error)` — Deserialization error.
     fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(buffer.len());
-
-        if let Ok(()) = self.0.fetch_from_isr(&mut buf_bytes) {
-            *buffer = T::from_bytes(&buf_bytes)?;
-            Ok(())
-        } else {
-            Err(Error::Timeout)
-        }
+        let mut buf_bytes = vec![0u8; buffer.len()];
+        self.0.fetch_from_isr(&mut buf_bytes)?;
+        *buffer = T::from_bytes(&buf_bytes)?;
+        Ok(())
     }
 
     /// Sends a typed message to the queue (without serde feature).
@@ -659,6 +692,7 @@ where
     ///
     /// * `Ok(())` — Message successfully serialized and sent.
     /// * `Err(Error::Timeout)` — Queue full.
+    /// * `Err(Error::InvalidMessageSize)` — Message size mismatch.
     /// * `Err(Error)` — Serialization error.
     #[inline]
     fn post(&self, item: &T, time: TickType) -> Result<()> {
@@ -677,6 +711,7 @@ where
     ///
     /// * `Ok(())` — Message successfully serialized and sent.
     /// * `Err(Error::Timeout)` — Queue is full.
+    /// * `Err(Error::InvalidMessageSize)` — Message size mismatch.
     /// * `Err(Error)` — Serialization error.
     #[inline]
     fn post_from_isr(&self, item: &T) -> Result<()> {
@@ -714,17 +749,14 @@ where
     ///
     /// * `Ok(())` — Message successfully received and deserialized.
     /// * `Err(Error::Timeout)` — Queue empty or timeout.
+    /// * `Err(Error::InvalidMessageSize)` — Buffer length mismatch.
     /// * `Err(Error::Unhandled)` — Deserialization error.
     fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(buffer.len());
-
-        if let Ok(()) = self.0.fetch(&mut buf_bytes, time) {
-            serde_to_bytes(buffer, &mut buf_bytes)
-                .map_err(|_| Error::Unhandled("Deserialization error"))?;
-            Ok(())
-        } else {
-            Err(Error::Timeout)
-        }
+        let mut buf_bytes = vec![0u8; buffer.len()];
+        self.0.fetch(&mut buf_bytes, time)?;
+        *buffer = serde_from_bytes(&buf_bytes)
+            .map_err(|_| Error::Unhandled("Deserialization error"))?;
+        Ok(())
     }
 
     /// Receives a typed message from ISR context (with serde feature).
@@ -739,17 +771,14 @@ where
     ///
     /// * `Ok(())` — Message successfully received and deserialized.
     /// * `Err(Error::Timeout)` — Queue is empty.
+    /// * `Err(Error::InvalidMessageSize)` — Buffer length mismatch.
     /// * `Err(Error::Unhandled)` — Deserialization error.
     fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(buffer.len());
-
-        if let Ok(()) = self.0.fetch_from_isr(&mut buf_bytes) {
-            serde_to_bytes(buffer, &mut buf_bytes)
-                .map_err(|_| Error::Unhandled("Deserialization error"))?;
-            Ok(())
-        } else {
-            Err(Error::Timeout)
-        }
+        let mut buf_bytes = vec![0u8; buffer.len()];
+        self.0.fetch_from_isr(&mut buf_bytes)?;
+        *buffer = serde_from_bytes(&buf_bytes)
+            .map_err(|_| Error::Unhandled("Deserialization error"))?;
+        Ok(())
     }
 
     /// Sends a typed message to the queue (with serde feature).
@@ -765,13 +794,15 @@ where
     ///
     /// * `Ok(())` — Message successfully serialized and sent.
     /// * `Err(Error::Timeout)` — Queue full.
+    /// * `Err(Error::InvalidMessageSize)` — Message size mismatch.
     /// * `Err(Error::Unhandled)` — Serialization error.
     fn post(&self, item: &T, time: TickType) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(item.len());
-
-        serde_to_bytes(item, &mut buf_bytes)
+        let mut buf_bytes = vec![0u8; item.len()];
+        let written = serde_to_bytes(item, &mut buf_bytes)
             .map_err(|_| Error::Unhandled("Serialization error"))?;
-
+        if written != buf_bytes.len() {
+            return Err(Error::InvalidMessageSize);
+        }
         self.0.post(&buf_bytes, time)
     }
 
@@ -787,13 +818,15 @@ where
     ///
     /// * `Ok(())` — Message successfully serialized and sent.
     /// * `Err(Error::Timeout)` — Queue is full.
+    /// * `Err(Error::InvalidMessageSize)` — Message size mismatch.
     /// * `Err(Error::Unhandled)` — Serialization error.
     fn post_from_isr(&self, item: &T) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(item.len());
-
-        serde_to_bytes(item, &mut buf_bytes)
+        let mut buf_bytes = vec![0u8; item.len()];
+        let written = serde_to_bytes(item, &mut buf_bytes)
             .map_err(|_| Error::Unhandled("Serialization error"))?;
-
+        if written != buf_bytes.len() {
+            return Err(Error::InvalidMessageSize);
+        }
         self.0.post_from_isr(&buf_bytes)
     }
 

@@ -170,6 +170,8 @@ pub enum Error<'a> {
     TaskNotFound,
     /// Invalid queue size specified
     InvalidQueueSize,
+    /// Message size does not match the queue's fixed message size
+    InvalidMessageSize,
     /// Null pointer encountered
     NullPtr,
     /// Requested item not found
@@ -211,6 +213,7 @@ impl<'a> Display for Error<'a> {
             StringConversionError => write!(f, "String conversion error"),
             TaskNotFound => write!(f, "Task not found"),
             InvalidQueueSize => write!(f, "Invalid queue size"),
+            InvalidMessageSize => write!(f, "Invalid queue message size"),
             NullPtr => write!(f, "Null pointer encountered"),
             NotFound => write!(f, "Item not found"),
             OutOfIndex => write!(f, "Index out of bounds"),

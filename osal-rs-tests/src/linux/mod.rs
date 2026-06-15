@@ -31,8 +31,15 @@ fn test_run_all_tests_event_group() {
 }
 
 #[test]
-fn test_run_all_tests_queue() {
+fn test_run_all_tests_queue_common() {
     crate::common::queue_tests::run_all_tests().unwrap();
+}
+
+mod queue_tests;
+
+#[test]
+fn test_run_all_tests_queue_linux() {
+    crate::linux::queue_tests::run_all_tests().unwrap();
 }
 
 #[test]
