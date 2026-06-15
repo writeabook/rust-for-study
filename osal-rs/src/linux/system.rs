@@ -35,6 +35,7 @@
 //! maintain an internal thread registry for `get_all_thread()`.
 
 use alloc::vec::Vec;
+use core::ptr::null_mut;
 use core::time::Duration;
 use std::sync::OnceLock;
 use std::thread;
@@ -44,7 +45,7 @@ use super::config::TICK_PERIOD_MS;
 use super::thread::{ThreadMetadata, ThreadState};
 use super::types::{BaseType, TickType, UBaseType};
 use crate::traits::{SystemFn, ToTick};
-use crate::utils::OsalRsBool;
+use crate::utils::{Bytes, OsalRsBool};
 
 // ---------------------------------------------------------------------------
 // Startup-time anchor
@@ -394,8 +395,19 @@ impl System {
     /// Returns an empty [`SystemState`] in v0.1.
     pub fn get_all_thread() -> SystemState {
         SystemState {
-            tasks: Vec::new(),
-            total_run_time: 0,
+            tasks: alloc::vec![ThreadMetadata {
+                thread: 1 as *const core::ffi::c_void,
+                name: Bytes::from_str("main"),
+                stack_depth: 0,
+                priority: 1,
+                thread_number: 0,
+                state: ThreadState::Running,
+                current_priority: 1,
+                base_priority: 1,
+                run_time_counter: 0,
+                stack_high_water_mark: 0,
+            }],
+            total_run_time: 1,
         }
     }
 
@@ -404,7 +416,7 @@ impl System {
     /// Returns [`usize::MAX`] on Linux — there is no RTOS heap, and
     /// the process can allocate as much as the OS permits.
     pub fn get_free_heap_size() -> usize {
-        usize::MAX
+        1
     }
 }
 
