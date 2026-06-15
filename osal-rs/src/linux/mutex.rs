@@ -271,7 +271,11 @@ impl<T: ?Sized> Mutex<T> {
     fn lock_from_isr_inner(&self) -> Result<MutexGuardFromIsr<'_, T>> {
         let current = std::thread::current().id();
 
+<<<<<<< HEAD
         // 1. Check and set owner (non-blocking).
+=======
+        // 1. Check and set owner atomically (non-blocking).
+>>>>>>> c6c728dd23f4b5240085ef909d2bc69bce834bc0
         {
             let mut owner = match self.owner.try_lock() {
                 Ok(o) => o,
@@ -288,10 +292,15 @@ impl<T: ?Sized> Mutex<T> {
         let data_guard = match self.data.try_lock() {
             Ok(g) => g,
             Err(_) => {
+<<<<<<< HEAD
                 // Rollback owner — use blocking lock() for reliability
                 // since this is an error-recovery path not performance-critical.
                 let mut owner = recover_lock(self.owner.lock());
                 *owner = None;
+=======
+                // Rollback owner.
+                if let Ok(mut o) = self.owner.try_lock() { *o = None; }
+>>>>>>> c6c728dd23f4b5240085ef909d2bc69bce834bc0
                 return Err(Error::MutexLockFailed);
             }
         };
