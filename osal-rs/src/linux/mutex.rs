@@ -24,10 +24,13 @@
 //!
 //! # Handles
 //!
-//! Linux mutexes expose unique, monotonically increasing handle IDs
-//! (cast to `MutexHandle = *const c_void`) for API-surface compatibility
-//! with the FreeRTOS backend. These handles are not dereferencable
-//! pointers and must only be used for comparison / diagnostics.
+//! Linux mutexes expose monotonically increasing handle IDs (cast to
+//! `MutexHandle = *const c_void`) for API-surface compatibility with
+//! the FreeRTOS backend.  Handles are unique for all practical process
+//! lifetimes; overflow would require creating more than `usize::MAX`
+//! mutex objects.
+//! These handles are **not** dereferencable pointers and must only be
+//! used for comparison / diagnostics.
 //!
 //! # ISR path (host simulation only)
 //!

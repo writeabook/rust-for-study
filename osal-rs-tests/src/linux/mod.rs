@@ -9,8 +9,15 @@ fn test_run_all_tests_system() {
 }
 
 #[test]
-fn test_run_all_tests_mutex() {
+fn test_run_all_tests_mutex_common() {
     crate::common::mutex_tests::run_all_tests().unwrap();
+}
+
+mod mutex_tests;
+
+#[test]
+fn test_run_all_tests_mutex_linux() {
+    crate::linux::mutex_tests::run_all_tests().unwrap();
 }
 
 #[test]
