@@ -2,37 +2,38 @@
 //!
 //! # Overview
 //!
-//! Implements the `RawMutexFn` and `MutexFn` traits using safe Rust
-//! standard-library primitives (`std::sync::Mutex`, `std::sync::Condvar`,
-//! `std::thread::ThreadId`). The mutex is **recursive** — the same thread
-//! may acquire it multiple times without deadlocking, matching the
-//! FreeRTOS recursive-mutex contract.
+//! Implements the `RawMutexFn` and `MutexFn` traits for the Linux backend.
 //!
 //! # Design
 //!
-//! - **Recursion**: A thread-ID field and a recursion counter track
-//!   ownership.  `lock()` increments the counter when called by the
-//!   owning thread; otherwise it blocks on a `Condvar`.
-//! - **Blocking**: `lock()` waits indefinitely via `Condvar::wait`,
-//!   matching the OSAL contract for `lock()` with `MAX_DELAY`.
-//! - **ISR emulation**: `lock_from_isr()` / `unlock_from_isr()` are
-//!   non-blocking try-lock wrappers — they use `try_lock` on the inner
-//!   `std::sync::Mutex` and return immediately.
-//! - **RAII**: `MutexGuard` and `MutexGuardFromIsr` release exactly one
-//!   recursion level on drop.
+//! - **RawMutex**: Low-level recursive mutex. Uses `StdMutex<State>`
+//!   plus `Condvar`. Supports recursion—the same thread may call `lock()`
+//!   multiple times. Each `lock()` increments a recursion counter; each
+//!   `unlock()` decrements it. The mutex is released when the counter
+//!   reaches zero.
 //!
-//! # Contract
+//! - **Mutex\<T\>**: High-level type-safe non-recursive mutex. Built
+//!   on `std::sync::Mutex<T>` for data-protection and a separate
+//!   `StdMutex<Option<ThreadId>>` to detect and reject recursive
+//!   locking. Does **not** use `UnsafeCell`—`Deref`/`DerefMut` directly
+//!   forward to the stdlib guard.
 //!
-//! See `doc/osal-contact-zh.md` §5 for the detailed behavioural
-//! specification.
+//! - **Guard**: Guarantees `!Send` by holding a `ThreadId` field.
+//!   `Drop` first clears the owner, then releases the stdlib guard.
+//!
+//! # Poison handling
+//!
+//! A helper `recover_lock()` transparently unpacks poisoned stdlib
+//! mutexes so the OSAL synchronization primitive remains usable after
+//! a panic in another thread. The recovered mutex's guarded data may
+//! be inconsistent—the caller is responsible for higher-level
+//! validation.
 
-use core::cell::UnsafeCell;
 use core::fmt::{Debug, Display, Formatter};
-use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
 use alloc::sync::Arc;
-use std::sync::{Condvar, Mutex as StdMutex};
+use std::sync::{Condvar, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::thread::ThreadId;
 
 use crate::traits::{MutexGuardFn, MutexFn, RawMutexFn};
@@ -40,20 +41,28 @@ use crate::utils::{Error, OsalRsBool, Result};
 use super::types::MutexHandle;
 
 // ---------------------------------------------------------------------------
-// RawMutex — recursive mutex built on stdlib primitives
+// Helper: recover from a poisoned std::sync::Mutex
 // ---------------------------------------------------------------------------
 
-/// Low-level recursive mutex for the Linux backend.
+/// Unpack a `LockResult`—if the mutex was poisoned, recover its inner
+/// value so the synchronization primitive remains usable.  The caller
+/// must be aware that the guarded data may be logically inconsistent.
+fn recover_lock<T>(result: std::sync::LockResult<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+// ===========================================================================
+// RawMutex — low-level recursive mutex
+// ===========================================================================
+
+/// Low-level recursive mutex.
 ///
-/// Uses `std::sync::Mutex<State>` + `std::sync::Condvar` to provide
-/// blocking, recursive mutual exclusion without FFI.
-///
-/// # Recursion
-///
-/// The same thread may call `lock()` multiple times.  Each `lock()`
-/// increments an internal recursion counter; each `unlock()` decrements
-/// it.  The mutex is only released for other threads when the counter
-/// reaches zero.
+/// Uses `StdMutex<State>` + `Condvar`. Same thread may lock multiple
+/// times; each lock must be matched by an unlock.  No data reference is
+/// exposed—only `OsalRsBool` return values.
 pub struct RawMutex {
     inner: StdMutex<RawMutexState>,
     condvar: Condvar,
@@ -61,15 +70,12 @@ pub struct RawMutex {
     handle: MutexHandle,
 }
 
-/// Internal state protected by the inner stdlib mutex.
 struct RawMutexState {
-    /// `Some(id)` when a thread holds the mutex; `None` when free.
     owner: Option<ThreadId>,
-    /// Number of times the owning thread has locked (≥ 1 when owned).
     recursion: u32,
 }
 
-// Safety: the inner stdlib `Mutex` provides Send + Sync.
+// Safety: StdMutex + Condvar are Send + Sync.
 unsafe impl Send for RawMutex {}
 unsafe impl Sync for RawMutex {}
 
@@ -86,13 +92,9 @@ impl Display for RawMutex {
 }
 
 impl RawMutex {
-    /// Creates a new recursive mutex in the unlocked state.
     pub fn new() -> Result<Self> {
         Ok(Self {
-            inner: StdMutex::new(RawMutexState {
-                owner: None,
-                recursion: 0,
-            }),
+            inner: StdMutex::new(RawMutexState { owner: None, recursion: 0 }),
             condvar: Condvar::new(),
             handle: 1 as MutexHandle,
         })
@@ -101,28 +103,19 @@ impl RawMutex {
 
 impl Deref for RawMutex {
     type Target = MutexHandle;
-
-    fn deref(&self) -> &Self::Target {
-        &self.handle
-    }
+    fn deref(&self) -> &Self::Target { &self.handle }
 }
 
 impl RawMutexFn for RawMutex {
-    /// Blocks until the mutex can be acquired.
-    ///
-    /// If called by the thread that already owns the mutex the
-    /// recursion counter is incremented and the call returns
-    /// immediately.
+
     fn lock(&self) -> OsalRsBool {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = recover_lock(self.inner.lock());
         let current = std::thread::current().id();
 
         if state.owner == Some(current) {
-            // Recursive acquisition by the owning thread.
             state.recursion += 1;
             OsalRsBool::True
         } else {
-            // Wait until the mutex becomes free.
             while state.owner.is_some() {
                 state = self.condvar.wait(state).unwrap();
             }
@@ -132,10 +125,6 @@ impl RawMutexFn for RawMutex {
         }
     }
 
-    /// Non-blocking try-lock (ISR emulation).
-    ///
-    /// Returns `True` if the mutex was immediately available,
-    /// `False` otherwise.  Does not block.
     fn lock_from_isr(&self) -> OsalRsBool {
         match self.inner.try_lock() {
             Ok(mut state) => {
@@ -155,32 +144,20 @@ impl RawMutexFn for RawMutex {
         }
     }
 
-    /// Releases one level of recursion.
-    ///
-    /// If the recursion counter reaches zero the mutex is made
-    /// available for other threads and one waiter is woken.
     fn unlock(&self) -> OsalRsBool {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = recover_lock(self.inner.lock());
         let current = std::thread::current().id();
-
         if state.owner != Some(current) || state.recursion == 0 {
-            // Not owned by us, or already fully released.
             return OsalRsBool::False;
         }
-
         state.recursion -= 1;
         if state.recursion == 0 {
             state.owner = None;
             self.condvar.notify_one();
         }
-
         OsalRsBool::True
     }
 
-    /// Releases the mutex from ISR context (non-blocking).
-    ///
-    /// Identical to `unlock()` on Linux since there is no distinct ISR
-    /// context, but provided for API compatibility.
     fn unlock_from_isr(&self) -> OsalRsBool {
         match self.inner.try_lock() {
             Ok(mut state) => {
@@ -191,7 +168,6 @@ impl RawMutexFn for RawMutex {
                 state.recursion -= 1;
                 if state.recursion == 0 {
                     state.owner = None;
-                    // We already hold the inner lock; unlock + notify.
                     drop(state);
                     self.condvar.notify_one();
                 }
@@ -201,83 +177,128 @@ impl RawMutexFn for RawMutex {
         }
     }
 
-    /// Destroys the mutex and releases its resources.
-    ///
-    /// On Linux this is effectively a no-op since all memory is
-    /// managed by Rust.  The inner state is consumed by dropping
-    /// `self`.
-    fn delete(&mut self) {
-        // Resources are released when this `RawMutex` is dropped.
-    }
+    fn delete(&mut self) {}
 }
 
-// ---------------------------------------------------------------------------
-// Mutex<T> — type-safe data wrapper
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Mutex<T> — high-level non-recursive typed mutex
+// ===========================================================================
 
-/// A mutual-exclusion primitive protecting shared data.
+/// A non-recursive mutual-exclusion wrapper protecting data of type `T`.
 ///
-/// Wraps a [`RawMutex`] together with an `UnsafeCell`-protected value.
-/// Provides RAII guards (`MutexGuard`, `MutexGuardFromIsr`) that
-/// release the lock automatically on drop.
+/// Built on `std::sync::Mutex<T>` for data protection and a separate
+/// `StdMutex<Option<ThreadId>>` to detect recursive lock attempts.
 ///
-/// # Type Parameters
+/// # Non-recursive
 ///
-/// * `T` — The type of data protected by this mutex.
-///
-/// # Examples
-///
-/// ```ignore
-/// use osal_rs::os::Mutex;
-///
-/// let mutex = Mutex::new(0u32);
-/// {
-///     let mut guard = mutex.lock().unwrap();
-///     *guard += 1;
-/// }
-/// ```
+/// Calling `lock()` while already holding a guard returns
+/// `Err(Error::MutexLockFailed)`.  Use [`RawMutex`] if recursion is
+/// needed (but no data access is required).
 pub struct Mutex<T: ?Sized> {
-    inner: RawMutex,
-    data: UnsafeCell<T>,
+    /// Tracks which thread currently holds the typed lock.
+    owner: StdMutex<Option<ThreadId>>,
+    /// Actual mutual exclusion on `T` (boxed to support `?Sized`).
+    data: Box<StdMutex<T>>,
+    /// Dummy handle for API surface compatibility (Deref target).
+    handle: MutexHandle,
 }
 
-// Safety: Send + Sync when T is Send.
+// Safety: StdMutex provides actual mutual exclusion.
+// handle is *const c_void (not Send+Sync), so we manually impl.
 unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
-unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
+unsafe impl<T: ?Sized + Send + Sync> Sync for Mutex<T> {}
+
+impl<T: ?Sized> Deref for Mutex<T> {
+    type Target = MutexHandle;
+    fn deref(&self) -> &Self::Target { &self.handle }
+}
 
 impl<T> Mutex<T> {
-    /// Creates a new mutex wrapping `data`.
-    ///
-    /// The mutex starts in the unlocked state.
-    pub fn new(data: T) -> Self
-    where
-        T: Sized,
-    {
+    pub fn new(data: T) -> Self {
         Self {
-            inner: RawMutex::new().unwrap(),
-            data: UnsafeCell::new(data),
+            owner: StdMutex::new(None),
+            data: Box::new(StdMutex::new(data)),
+            handle: 1 as MutexHandle,
         }
     }
 
-    /// Creates a new mutex wrapped in an `Arc` for sharing.
     pub fn new_arc(data: T) -> Arc<Self> {
         Arc::new(Self::new(data))
     }
 }
 
 impl<T: ?Sized> Mutex<T> {
-    /// Acquires the mutex from ISR context, returning an
-    /// ISR-specific guard type.
-    ///
-    /// On Linux this is a non-blocking try-lock.
+
+    /// ISR-specific lock alias (API surface compatibility).
     pub fn lock_from_isr_explicit(&self) -> Result<MutexGuardFromIsr<'_, T>> {
-        match self.inner.lock_from_isr() {
-            OsalRsBool::True => Ok(MutexGuardFromIsr {
-                mutex: self,
-                _phantom: PhantomData,
-            }),
-            OsalRsBool::False => Err(Error::MutexLockFailed),
+        self.lock_from_isr()
+    }
+
+    // -- internal helpers --------------------------------------------------
+
+    /// Acquire the typed lock (blocking).  Returns an error if the
+    /// current thread already holds the lock—recursive acquisition of
+    /// the typed mutex is not permitted.
+    fn lock_inner(&self) -> Result<MutexGuard<'_, T>> {
+        let current = std::thread::current().id();
+
+        // 1. Check / set owner — detect recursive locking.
+        {
+            let mut owner = recover_lock(self.owner.lock());
+            if *owner == Some(current) {
+                return Err(Error::MutexLockFailed);
+            }
+            // Do NOT set owner yet — we must hold the data lock first.
         }
+
+        // 2. Acquire data lock.
+        let data_guard = recover_lock(self.data.lock());
+
+        // 3. Commit owner.
+        {
+            let mut owner = recover_lock(self.owner.lock());
+            *owner = Some(current);
+        }
+
+        Ok(MutexGuard {
+            owner: &self.owner,
+            data_guard: Some(data_guard),
+            _thread_id: current,
+        })
+    }
+
+    /// Non-blocking try-lock (ISR emulation).
+    fn lock_from_isr_inner(&self) -> Result<MutexGuardFromIsr<'_, T>> {
+        let current = std::thread::current().id();
+
+        // 1. Check owner (non-blocking).
+        {
+            let owner = match self.owner.try_lock() {
+                Ok(o) => o,
+                Err(_) => return Err(Error::MutexLockFailed),
+            };
+            if *owner == Some(current) {
+                return Err(Error::MutexLockFailed);
+            }
+        }
+
+        // 2. Try-lock data.
+        let data_guard = match self.data.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Err(Error::MutexLockFailed),
+        };
+
+        // 3. Commit owner.
+        {
+            let mut owner = recover_lock(self.owner.lock());
+            *owner = Some(current);
+        }
+
+        Ok(MutexGuardFromIsr {
+            owner: &self.owner,
+            data_guard: Some(data_guard),
+            _thread_id: current,
+        })
     }
 }
 
@@ -285,40 +306,22 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
     type Guard<'a> = MutexGuard<'a, T> where Self: 'a, T: 'a;
     type GuardFromIsr<'a> = MutexGuardFromIsr<'a, T> where Self: 'a, T: 'a;
 
-    /// Acquires the mutex, blocking until it becomes available.
-    ///
-    /// Returns a RAII guard that provides access to the protected data
-    /// and releases the lock when dropped.
     fn lock(&self) -> Result<Self::Guard<'_>> {
-        match self.inner.lock() {
-            OsalRsBool::True => Ok(MutexGuard {
-                mutex: self,
-                _phantom: PhantomData,
-            }),
-            OsalRsBool::False => Err(Error::MutexLockFailed),
-        }
+        self.lock_inner()
     }
 
-    /// Attempts to acquire the mutex without blocking (ISR-friendly).
     fn lock_from_isr(&self) -> Result<Self::GuardFromIsr<'_>> {
-        self.lock_from_isr_explicit()
+        self.lock_from_isr_inner()
     }
 
-    /// Consumes the mutex and returns the inner data.
     fn into_inner(self) -> Result<T>
-    where
-        Self: Sized,
-        T: Sized,
+    where Self: Sized, T: Sized,
     {
-        Ok(self.data.into_inner())
+        Ok(recover_lock(self.data.into_inner()))
     }
 
-    /// Returns a mutable reference to the inner data.
-    ///
-    /// Since the caller holds `&mut self`, exclusive access is
-    /// guaranteed at compile time — no locking is required.
     fn get_mut(&mut self) -> &mut T {
-        self.data.get_mut()
+        recover_lock(self.data.get_mut())
     }
 }
 
@@ -335,85 +338,101 @@ impl<T: ?Sized> Display for Mutex<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // MutexGuard — RAII lock for normal context
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 /// RAII guard returned by [`Mutex::lock`].
 ///
-/// Releases one recursion level of the underlying mutex when dropped.
+/// Provides `Deref` / `DerefMut` access to `T`, and automatically
+/// releases the lock on drop.  **Not `Send`** — the guard is tied to
+/// the thread that acquired it.
 pub struct MutexGuard<'a, T: ?Sized + 'a> {
-    mutex: &'a Mutex<T>,
-    _phantom: PhantomData<&'a mut T>,
+    owner: &'a StdMutex<Option<ThreadId>>,
+    data_guard: Option<StdMutexGuard<'a, T>>,
+    /// Binds the guard to the acquiring thread → `!Send`.
+    _thread_id: ThreadId,
 }
 
 impl<'a, T: ?Sized> Deref for MutexGuard<'a, T> {
     type Target = T;
-
     fn deref(&self) -> &T {
-        unsafe { &*self.mutex.data.get() }
+        self.data_guard.as_deref().expect("guard already released")
     }
 }
 
 impl<'a, T: ?Sized> DerefMut for MutexGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.mutex.data.get() }
+        self.data_guard.as_deref_mut().expect("guard already released")
     }
 }
 
 impl<'a, T: ?Sized> Drop for MutexGuard<'a, T> {
     fn drop(&mut self) {
-        self.mutex.inner.unlock();
+        // 1. Clear owner.
+        {
+            let mut owner = recover_lock(self.owner.lock());
+            *owner = None;
+        }
+        // 2. Release data mutex.
+        drop(self.data_guard.take());
     }
 }
 
 impl<'a, T: ?Sized> MutexGuardFn<'a, T> for MutexGuard<'a, T> {
-    fn update(&mut self, t: &T)
-    where
-        T: Clone,
-    {
+    fn update(&mut self, t: &T) where T: Clone {
         **self = t.clone();
     }
 }
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // MutexGuardFromIsr — non-blocking ISR variant
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
-/// RAII guard returned by [`Mutex::lock_from_isr`] and
-/// [`Mutex::lock_from_isr_explicit`].
+/// RAII guard returned by [`Mutex::lock_from_isr`].
 ///
-/// Uses ISR-safe unlock on drop.
+/// Drop reliably releases the lock (owner → data order).
+/// **Not `Send`** — bound to the acquiring thread.
 pub struct MutexGuardFromIsr<'a, T: ?Sized + 'a> {
-    mutex: &'a Mutex<T>,
-    _phantom: PhantomData<&'a mut T>,
+    owner: &'a StdMutex<Option<ThreadId>>,
+    data_guard: Option<StdMutexGuard<'a, T>>,
+    _thread_id: ThreadId,
 }
 
 impl<'a, T: ?Sized> Deref for MutexGuardFromIsr<'a, T> {
     type Target = T;
-
     fn deref(&self) -> &T {
-        unsafe { &*self.mutex.data.get() }
+        self.data_guard.as_deref().expect("guard already released")
     }
 }
 
 impl<'a, T: ?Sized> DerefMut for MutexGuardFromIsr<'a, T> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.mutex.data.get() }
+        self.data_guard.as_deref_mut().expect("guard already released")
     }
 }
 
 impl<'a, T: ?Sized> Drop for MutexGuardFromIsr<'a, T> {
     fn drop(&mut self) {
-        self.mutex.inner.unlock_from_isr();
+        // 1. Clear owner.
+        {
+            let mut owner = recover_lock(self.owner.lock());
+            *owner = None;
+        }
+        // 2. Release data mutex.
+        drop(self.data_guard.take());
     }
 }
 
 impl<'a, T: ?Sized> MutexGuardFn<'a, T> for MutexGuardFromIsr<'a, T> {
-    fn update(&mut self, t: &T)
-    where
-        T: Clone,
-    {
+    fn update(&mut self, t: &T) where T: Clone {
         **self = t.clone();
     }
 }
+
+// ===========================================================================
+// Compile-time safety: guards must not be Send
+// ===========================================================================
+// The _thread_id: ThreadId field ensures that neither MutexGuard nor
+// MutexGuardFromIsr implements Send (ThreadId is !Send on most
+// platforms).  This is verified by static_assertions tests.

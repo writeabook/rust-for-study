@@ -21,7 +21,7 @@
 extern crate alloc;
 
 use osal_rs::os::*;
-use osal_rs::utils::Result;
+use osal_rs::utils::{OsalRsBool, Result};
 use osal_rs::{log_debug, log_info};
 
 const TAG: &str = "MutexTests";
@@ -133,17 +133,36 @@ pub fn test_mutex_with_struct() -> Result<()> {
     Ok(())
 }
 
-pub fn test_mutex_recursive() -> Result<()> {
-    log_info!(TAG, "Starting test_mutex_recursive");
+pub fn test_mutex_non_recursive() -> Result<()> {
+    log_info!(TAG, "Starting test_mutex_non_recursive");
     let mutex = Mutex::new(0u32);
-    
-    let _guard1 = mutex.lock()?;
-    log_debug!(TAG, "Lock 1 acquired");
-    let _guard2 = mutex.lock()?;
-    log_debug!(TAG, "Lock 2 acquired");
-    let _guard3 = mutex.lock()?;
-    log_debug!(TAG, "Lock 3 acquired");
-    log_info!(TAG, "test_mutex_recursive PASSED");
+
+    let _guard = mutex.lock()?;
+    log_debug!(TAG, "First lock acquired");
+
+    let second = mutex.lock();
+    assert!(
+        second.is_err(),
+        "typed Mutex<T> must not return a second mutable guard"
+    );
+
+    log_info!(TAG, "test_mutex_non_recursive PASSED");
+    Ok(())
+}
+
+pub fn test_raw_mutex_recursive() -> Result<()> {
+    log_info!(TAG, "Starting test_raw_mutex_recursive");
+    let raw = RawMutex::new()?;
+
+    assert_eq!(raw.lock(), OsalRsBool::True);
+    assert_eq!(raw.lock(), OsalRsBool::True);
+    assert_eq!(raw.lock(), OsalRsBool::True);
+
+    assert_eq!(raw.unlock(), OsalRsBool::True);
+    assert_eq!(raw.unlock(), OsalRsBool::True);
+    assert_eq!(raw.unlock(), OsalRsBool::True);
+
+    log_info!(TAG, "test_raw_mutex_recursive PASSED");
     Ok(())
 }
 
@@ -163,7 +182,8 @@ pub fn run_all_tests() -> Result<()> {
     test_mutex_multiple_locks()?;
     test_mutex_guard_drop()?;
     test_mutex_with_struct()?;
-    test_mutex_recursive()?;
+    test_mutex_non_recursive()?;
+    test_raw_mutex_recursive()?;
     test_mutex_drop()?;
     log_info!(TAG, "========== All Mutex Tests PASSED ==========");
     Ok(())
