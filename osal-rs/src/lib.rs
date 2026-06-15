@@ -392,13 +392,13 @@ pub mod os {
 ///
 /// Provides a minimal `os` module so that trait code continues to compile
 /// while the Linux backend is under development.
-#[cfg(feature = "linux")]
+#[cfg(all(feature = "linux", not(feature = "freertos"), not(feature = "posix")))]
 pub mod os {
     pub use crate::traits::*;
     pub use crate::linux::types as types;
     pub use crate::linux::config as config;
     pub use crate::linux::system::{System, SystemState};
-    pub use crate::linux::thread::{ThreadState, ThreadMetadata};
+    pub use crate::linux::thread::{Thread, ThreadMetadata, ThreadState};
     pub use crate::linux::mutex::*;
     pub use crate::linux::semaphore::*;
     #[allow(unused_imports)]
