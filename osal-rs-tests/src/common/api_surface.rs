@@ -26,6 +26,9 @@ use core::time::Duration;
 
 use osal_rs::log::{self, log_levels};
 use osal_rs::os::*;
+use osal_rs::log_info;
+
+const TAG: &str = "ApiSurfaceTests";
 
 #[cfg(not(feature = "serde"))]
 use osal_rs::os::{Deserialize, Serialize};
@@ -326,4 +329,31 @@ pub fn compile_logging_surface() {
     osal_rs::log_warning!("CompileOnly", "warning {}", 5u8);
     osal_rs::log_error!("CompileOnly", "error {}", 6u8);
     osal_rs::log_fatal!("CompileOnly", "fatal {}", 7u8);
+}
+
+
+pub fn run_all_tests() -> Result<()> {
+    log_info!(TAG, "\n\n========================================");
+    log_info!(TAG, " Starting API Surface Test Suite");
+    log_info!(TAG, "========================================\n");
+
+    // Intentionally do not call compile_*_surface() here.
+    //
+    // The purpose of api_surface.rs is to make the Rust compiler type-check
+    // the API names, signatures, trait bounds, generic constraints, and macros.
+    // The function bodies are type-checked as long as this module is compiled.
+    //
+    // Calling compile_*_surface() would turn this file into a runtime behavior
+    // test, which is not what API surface tests are for, and may be unstable
+    // across Linux/POSIX and FreeRTOS backends.
+
+    let _system_surface: fn() = compile_system_surface;
+    let _core_surface: fn() = compile_core_surface;
+    let _logging_surface: fn() = compile_logging_surface;
+
+    log_info!(TAG, "\n========================================");
+    log_info!(TAG, " API Surface Compile Check PASSED!");
+    log_info!(TAG, "========================================\n");
+
+    Ok(())
 }

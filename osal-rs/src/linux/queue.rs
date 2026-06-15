@@ -42,7 +42,7 @@ use crate::traits::{BytesHasLen, Serialize};
 use osal_rs_serde::{Deserialize, Serialize, to_bytes as serde_to_bytes};
 
 use crate::traits::{QueueFn, QueueStreamedFn, ToTick};
-use super::types::{TickType, UBaseType};
+use super::types::{QueueHandle, TickType, UBaseType};
 use crate::utils::{Error, Result, MAX_DELAY};
 
 // ---------------------------------------------------------------------------
@@ -106,11 +106,19 @@ struct QueueInner {
 pub struct Queue {
     inner: StdMutex<QueueInner>,
     condvar: Condvar,
+    handle: QueueHandle,
 }
 
 // Safety: StdMutex + Condvar are Send + Sync.
 unsafe impl Send for Queue {}
 unsafe impl Sync for Queue {}
+
+impl Deref for Queue {
+    type Target = QueueHandle;
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
 
 impl Queue {
     /// Creates a new queue.
@@ -145,6 +153,7 @@ impl Queue {
                 closed: false,
             }),
             condvar: Condvar::new(),
+            handle: 1 as QueueHandle,
         })
     }
 

@@ -13,6 +13,7 @@
 //! - `ticks_to_wait` parameter is ignored (no command queue).
 
 use core::fmt::{Debug, Display, Formatter};
+use core::ops::Deref;
 use core::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 use alloc::boxed::Box;
@@ -25,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use crate::traits::{TimerFn, TimerFnPtr, TimerParam, ToTick};
 use crate::utils::{OsalRsBool, Result};
-use super::types::TickType;
+use super::types::{TickType, TimerHandle};
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
 
@@ -56,10 +57,18 @@ pub struct Timer {
     inner: Arc<StdMutex<TimerInner>>,
     /// Woken by `start()` / `stop()` / `delete()` to unblock the worker.
     condvar: Arc<Condvar>,
+    handle: TimerHandle,
 }
 
 unsafe impl Send for Timer {}
 unsafe impl Sync for Timer {}
+
+impl Deref for Timer {
+    type Target = TimerHandle;
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
 
 impl Timer {
     pub fn new<F>(
@@ -87,6 +96,7 @@ impl Timer {
                 worker: None,
             })),
             condvar: Arc::new(Condvar::new()),
+            handle: 1 as TimerHandle,
         })
     }
 
@@ -177,6 +187,7 @@ fn worker_loop(inner: Arc<StdMutex<TimerInner>>, cv: Arc<Condvar>, timer_id: usi
                     id: timer_id,
                     inner: Arc::clone(&inner),
                     condvar: Arc::clone(&cv),
+                    handle: 1 as TimerHandle,
                 });
                 let _ = cb(boxed, param);
             }
@@ -265,6 +276,7 @@ impl Clone for Timer {
             id: self.id,
             inner: Arc::clone(&self.inner),
             condvar: Arc::clone(&self.condvar),
+            handle: self.handle,
         }
     }
 }

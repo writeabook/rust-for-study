@@ -24,6 +24,7 @@
 //! specification.
 
 use core::fmt::{Debug, Display, Formatter};
+use core::ops::Deref;
 use core::time::Duration;
 
 use std::sync::{Condvar, Mutex as StdMutex};
@@ -31,7 +32,7 @@ use std::time::Instant;
 
 use crate::traits::SemaphoreFn;
 use crate::traits::ToTick;
-use super::types::UBaseType;
+use super::types::{SemaphoreHandle, UBaseType};
 use crate::utils::{Error, OsalRsBool, Result, MAX_DELAY};
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,7 @@ use crate::utils::{Error, OsalRsBool, Result, MAX_DELAY};
 pub struct Semaphore {
     inner: StdMutex<SemaphoreState>,
     condvar: Condvar,
+    handle: SemaphoreHandle,
 }
 
 struct SemaphoreState {
@@ -70,6 +72,11 @@ struct SemaphoreState {
 // Safety: StdMutex + Condvar are Send + Sync.
 unsafe impl Send for Semaphore {}
 unsafe impl Sync for Semaphore {}
+
+impl Deref for Semaphore {
+    type Target = SemaphoreHandle;
+    fn deref(&self) -> &Self::Target { &self.handle }
+}
 
 impl Semaphore {
     /// Creates a new counting semaphore.
@@ -93,6 +100,7 @@ impl Semaphore {
                 max_count,
             }),
             condvar: Condvar::new(),
+            handle: 1 as SemaphoreHandle,
         })
     }
 

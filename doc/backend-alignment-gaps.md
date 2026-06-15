@@ -284,3 +284,23 @@
 | **Function** | `Timer::delete` / `Drop` → `xTimerDelete` | `Timer::delete` / `Drop` → sets `deleted` + `cancelled` flags, notifies worker via `Condvar` |
 | **Behavior** | FreeRTOS asynchronously deletes the timer object and frees kernel resources. | Linux sets flags so the worker thread exits on its next poll cycle. No explicit thread join in Drop (avoids blocking). |
 | **Mitigation** | N/A. | Worker threads may linger briefly after `delete()` returns. Application code should allow a short grace period before process exit.
+
+---
+
+## 29. Handle Deref Compatibility
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Deref<Target=XxxHandle>` returns the real FreeRTOS kernel handle for every OS object (`Thread`, `Queue`, `Semaphore`, `Mutex`, `EventGroup`, `Timer`). | `Deref<Target=XxxHandle>` returns a dummy `1 as XxxHandle` pointer — Linux has no kernel handles. |
+| **Behavior** | The handle can be passed to C FFI functions or used for low-level FreeRTOS API calls. | The dummy pointer satisfies the API surface contract (`&obj as &XxxHandle`) but must never be dereferenced — it points to address `0x1`. |
+| **Mitigation** | N/A. | This is purely a compile-time API compatibility shim. Application code should not rely on handle values on Linux. |
+
+---
+
+## 30. Thread — Handle-Based Constructors & Introspection
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Thread::new_with_handle`, `new_with_to_priority`, `new_with_handle_and_to_priority`, `get_metadata_from_handle`, `get_metadata`, `wait_notification_with_to_tick` | Same signatures — stub / delegate implementations |
+| **Behavior** | `new_with_handle` wraps an existing FreeRTOS task handle. `get_metadata_from_handle` queries the kernel via `vTaskGetInfo`. | `new_with_handle` creates a fresh Linux `Thread` (ignoring the handle). `get_metadata_from_handle` returns a dummy `ThreadMetadata` with `state: Running`. |
+| **Mitigation** | N/A. | These methods exist for API surface parity only. Use `Thread::new()` + `spawn()` for Linux thread creation. |

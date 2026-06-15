@@ -25,6 +25,7 @@
 //! specification.
 
 use core::fmt::{Debug, Display, Formatter};
+use core::ops::Deref;
 use core::time::Duration;
 
 use std::sync::{Condvar, Mutex as StdMutex};
@@ -32,7 +33,7 @@ use std::time::Instant;
 
 use crate::traits::EventGroupFn;
 use crate::traits::ToTick;
-use super::types::{EventBits, TickType};
+use super::types::{EventBits, EventGroupHandle, TickType};
 use crate::utils::{Error, Result, MAX_DELAY};
 
 // ---------------------------------------------------------------------------
@@ -68,11 +69,21 @@ use crate::utils::{Error, Result, MAX_DELAY};
 pub struct EventGroup {
     inner: StdMutex<usize>,
     condvar: Condvar,
+    /// Dummy handle for API surface compatibility (Deref target).
+    handle: EventGroupHandle,
 }
 
 // Safety: StdMutex + Condvar are Send + Sync.
 unsafe impl Send for EventGroup {}
 unsafe impl Sync for EventGroup {}
+
+impl Deref for EventGroup {
+    type Target = EventGroupHandle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
 
 impl EventGroup {
     /// Maximum usable event bits mask.
@@ -99,6 +110,7 @@ impl EventGroup {
         Ok(Self {
             inner: StdMutex::new(0),
             condvar: Condvar::new(),
+            handle: 1 as EventGroupHandle,
         })
     }
 

@@ -35,8 +35,9 @@ use alloc::sync::Arc;
 use std::sync::{Condvar, Mutex as StdMutex};
 use std::thread::ThreadId;
 
-use crate::traits::{MutexGuardFn, RawMutexFn, MutexFn};
+use crate::traits::{MutexGuardFn, MutexFn, RawMutexFn};
 use crate::utils::{Error, OsalRsBool, Result};
+use super::types::MutexHandle;
 
 // ---------------------------------------------------------------------------
 // RawMutex — recursive mutex built on stdlib primitives
@@ -56,6 +57,8 @@ use crate::utils::{Error, OsalRsBool, Result};
 pub struct RawMutex {
     inner: StdMutex<RawMutexState>,
     condvar: Condvar,
+    /// Dummy handle for API surface compatibility (Deref target).
+    handle: MutexHandle,
 }
 
 /// Internal state protected by the inner stdlib mutex.
@@ -70,6 +73,18 @@ struct RawMutexState {
 unsafe impl Send for RawMutex {}
 unsafe impl Sync for RawMutex {}
 
+impl Debug for RawMutex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RawMutex").finish_non_exhaustive()
+    }
+}
+
+impl Display for RawMutex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "RawMutex")
+    }
+}
+
 impl RawMutex {
     /// Creates a new recursive mutex in the unlocked state.
     pub fn new() -> Result<Self> {
@@ -79,7 +94,16 @@ impl RawMutex {
                 recursion: 0,
             }),
             condvar: Condvar::new(),
+            handle: 1 as MutexHandle,
         })
+    }
+}
+
+impl Deref for RawMutex {
+    type Target = MutexHandle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.handle
     }
 }
 

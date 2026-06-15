@@ -283,3 +283,23 @@
 | **函数** | `Timer::delete` / `Drop` → `xTimerDelete` | `Timer::delete` / `Drop` → 设置 `deleted` + `cancelled` 标志，通过 `Condvar` 通知工作线程 |
 | **行为** | FreeRTOS 异步删除定时器对象并释放内核资源。 | Linux 设置标志，工作线程在下个轮询周期退出。Drop 中不显式 join 线程（避免阻塞）。 |
 | **缓解措施** | 不适用。 | 工作线程可能在 `delete()` 返回后短暂逗留。应用代码应在进程退出前预留短暂宽限期。
+
+---
+
+## 29. 句柄 Deref 兼容性
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Deref<Target=XxxHandle>` 为每个 OS 对象（`Thread`、`Queue`、`Semaphore`、`Mutex`、`EventGroup`、`Timer`）返回真实的 FreeRTOS 内核句柄。 | `Deref<Target=XxxHandle>` 返回虚拟的 `1 as XxxHandle` 指针——Linux 无内核句柄。 |
+| **行为** | 句柄可传递给 C FFI 函数或用于底层 FreeRTOS API 调用。 | 虚拟指针满足 API 表面契约（`&obj as &XxxHandle`），但绝对不能解引用——它指向地址 `0x1`。 |
+| **缓解措施** | 不适用。 | 这纯粹是编译期 API 兼容层。应用代码不应在 Linux 上依赖句柄值。 |
+
+---
+
+## 30. Thread — 基于句柄的构造函数与内省
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Thread::new_with_handle`、`new_with_to_priority`、`new_with_handle_and_to_priority`、`get_metadata_from_handle`、`get_metadata`、`wait_notification_with_to_tick` | 相同签名——桩/委托实现 |
+| **行为** | `new_with_handle` 包装已有的 FreeRTOS 任务句柄。`get_metadata_from_handle` 通过 `vTaskGetInfo` 查询内核。 | `new_with_handle` 创建新的 Linux `Thread`（忽略句柄）。`get_metadata_from_handle` 返回虚拟 `ThreadMetadata`，其 `state: Running`。 |
+| **缓解措施** | 不适用。 | 这些方法仅为 API 表面一致性而存在。在 Linux 上使用 `Thread::new()` + `spawn()` 创建线程。 |
