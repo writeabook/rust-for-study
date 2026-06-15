@@ -117,7 +117,7 @@ impl RawMutexFn for RawMutex {
             OsalRsBool::True
         } else {
             while state.owner.is_some() {
-                state = self.condvar.wait(state).unwrap();
+                state = recover_lock(self.condvar.wait(state));
             }
             state.owner = Some(current);
             state.recursion = 1;
@@ -206,7 +206,7 @@ pub struct Mutex<T: ?Sized> {
 // Safety: StdMutex provides actual mutual exclusion.
 // handle is *const c_void (not Send+Sync), so we manually impl.
 unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
-unsafe impl<T: ?Sized + Send + Sync> Sync for Mutex<T> {}
+unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 
 impl<T: ?Sized> Deref for Mutex<T> {
     type Target = MutexHandle;
@@ -271,28 +271,27 @@ impl<T: ?Sized> Mutex<T> {
     fn lock_from_isr_inner(&self) -> Result<MutexGuardFromIsr<'_, T>> {
         let current = std::thread::current().id();
 
-        // 1. Check owner (non-blocking).
+        // 1. Check and set owner atomically (non-blocking).
         {
-            let owner = match self.owner.try_lock() {
+            let mut owner = match self.owner.try_lock() {
                 Ok(o) => o,
                 Err(_) => return Err(Error::MutexLockFailed),
             };
             if *owner == Some(current) {
                 return Err(Error::MutexLockFailed);
             }
+            *owner = Some(current);
         }
 
         // 2. Try-lock data.
         let data_guard = match self.data.try_lock() {
             Ok(g) => g,
-            Err(_) => return Err(Error::MutexLockFailed),
+            Err(_) => {
+                // Rollback owner.
+                if let Ok(mut o) = self.owner.try_lock() { *o = None; }
+                return Err(Error::MutexLockFailed);
+            }
         };
-
-        // 3. Commit owner.
-        {
-            let mut owner = recover_lock(self.owner.lock());
-            *owner = Some(current);
-        }
 
         Ok(MutexGuardFromIsr {
             owner: &self.owner,
@@ -350,7 +349,8 @@ impl<T: ?Sized> Display for Mutex<T> {
 pub struct MutexGuard<'a, T: ?Sized + 'a> {
     owner: &'a StdMutex<Option<ThreadId>>,
     data_guard: Option<StdMutexGuard<'a, T>>,
-    /// Binds the guard to the acquiring thread → `!Send`.
+    /// Identifies the acquiring thread for debug diagnostics.
+    /// The guard is `!Send` because it wraps `StdMutexGuard`.
     _thread_id: ThreadId,
 }
 
@@ -392,7 +392,7 @@ impl<'a, T: ?Sized> MutexGuardFn<'a, T> for MutexGuard<'a, T> {
 /// RAII guard returned by [`Mutex::lock_from_isr`].
 ///
 /// Drop reliably releases the lock (owner → data order).
-/// **Not `Send`** — bound to the acquiring thread.
+/// `!Send` because it contains a `StdMutexGuard<'a, T>`.
 pub struct MutexGuardFromIsr<'a, T: ?Sized + 'a> {
     owner: &'a StdMutex<Option<ThreadId>>,
     data_guard: Option<StdMutexGuard<'a, T>>,
