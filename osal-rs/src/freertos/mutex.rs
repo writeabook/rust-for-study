@@ -28,6 +28,8 @@ use core::cell::UnsafeCell;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::{Deref, DerefMut};
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicPtr, Ordering};
+use core::ptr::null_mut;
 
 use alloc::sync::Arc;
 
@@ -337,7 +339,11 @@ impl Display for RawMutex {
 /// ```
 pub struct Mutex<T: ?Sized> {
     inner: RawMutex,
-    data: UnsafeCell<T>
+    data: UnsafeCell<T>,
+    /// Tracks the task that currently holds the typed lock.
+    /// `null_mut()` means no task holds it.
+    /// Used to detect and reject recursive typed locking.
+    owner: AtomicPtr<core::ffi::c_void>,
 }
 
 
@@ -371,6 +377,7 @@ impl<T: ?Sized>  Mutex<T> {
         Self {
             inner: RawMutex::new().unwrap(),
             data: UnsafeCell::new(data),
+            owner: AtomicPtr::new(null_mut()),
         }
     }
 
@@ -409,13 +416,26 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
     /// // Mutex automatically unlocked when guard goes out of scope
     /// ```
     fn lock(&self) -> Result<Self::Guard<'_>> {
-        match self.inner.lock() {
-            OsalRsBool::True => Ok(MutexGuard {
-                mutex: self,
-                _phantom: PhantomData,
-            }),
-            OsalRsBool::False => Err(Error::MutexLockFailed),
+        // Check owner BEFORE locking to prevent recursive deadlock.
+        let current = unsafe { super::ffi::task::xTaskGetCurrentTaskHandle() };
+        let prev = self.owner.load(Ordering::Acquire);
+        if prev == current && !current.is_null() {
+            // Same task already holds the typed lock — reject early.
+            return Err(Error::MutexLockFailed);
         }
+
+        // Acquire the underlying recursive mutex.
+        if self.inner.lock() == OsalRsBool::False {
+            return Err(Error::MutexLockFailed);
+        }
+
+        // Commit owner.
+        self.owner.store(current, Ordering::Release);
+
+        Ok(MutexGuard {
+            mutex: self,
+            _phantom: PhantomData,
+        })
     }
 
     /// Acquires the mutex from an ISR context.
@@ -445,13 +465,23 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
     /// }
     /// ```
     fn lock_from_isr(&self) -> Result<Self::GuardFromIsr<'_>> {
-        match self.inner.lock_from_isr() {
-            OsalRsBool::True => Ok(MutexGuardFromIsr {
-                mutex: self,
-                _phantom: PhantomData,
-            }),
-            OsalRsBool::False => Err(Error::MutexLockFailed),
+        // Check owner BEFORE locking (ISR must be non-blocking).
+        let current = unsafe { super::ffi::task::xTaskGetCurrentTaskHandle() };
+        let prev = self.owner.load(Ordering::Acquire);
+        if prev == current && !current.is_null() {
+            return Err(Error::MutexLockFailed);
         }
+
+        if self.inner.lock_from_isr() == OsalRsBool::False {
+            return Err(Error::MutexLockFailed);
+        }
+
+        self.owner.store(current, Ordering::Release);
+
+        Ok(MutexGuardFromIsr {
+            mutex: self,
+            _phantom: PhantomData,
+        })
     }
 
     /// Consumes the mutex and returns the inner data.
@@ -513,13 +543,7 @@ impl<T: ?Sized> Mutex<T> {
     /// }
     /// ```
     pub fn lock_from_isr_explicit(&self) -> Result<MutexGuardFromIsr<'_, T>> {
-        match self.inner.lock_from_isr() {
-            OsalRsBool::True => Ok(MutexGuardFromIsr {
-                mutex: self,
-                _phantom: PhantomData,
-            }),
-            OsalRsBool::False => Err(Error::MutexLockFailed),
-        }
+        self.lock_from_isr()
     }
 }
 
@@ -611,6 +635,7 @@ impl<'a, T: ?Sized> DerefMut for MutexGuard<'a, T> {
 /// Automatically unlocks the mutex when the guard goes out of scope.
 impl<'a, T: ?Sized> Drop for MutexGuard<'a, T> {
     fn drop(&mut self) {
+        self.mutex.owner.store(null_mut(), Ordering::Release);
         self.mutex.inner.unlock();
     }
 }
@@ -677,6 +702,7 @@ impl<'a, T: ?Sized> DerefMut for MutexGuardFromIsr<'a, T> {
 /// Automatically unlocks the mutex using ISR-safe unlock when the guard goes out of scope.
 impl<'a, T: ?Sized> Drop for MutexGuardFromIsr<'a, T> {
     fn drop(&mut self) {
+        self.mutex.owner.store(null_mut(), Ordering::Release);
         self.mutex.inner.unlock_from_isr();
     }
 }

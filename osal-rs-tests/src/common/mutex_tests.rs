@@ -20,6 +20,8 @@
 
 extern crate alloc;
 
+use alloc::sync::Arc;
+
 use osal_rs::os::*;
 use osal_rs::utils::{OsalRsBool, Result};
 use osal_rs::{log_debug, log_info};
@@ -152,15 +154,47 @@ pub fn test_mutex_non_recursive() -> Result<()> {
 
 pub fn test_raw_mutex_recursive() -> Result<()> {
     log_info!(TAG, "Starting test_raw_mutex_recursive");
-    let raw = RawMutex::new()?;
+    use std::thread;
 
+    let raw = Arc::new(RawMutex::new()?);
+
+    // Recursive acquisition: 3 locks
     assert_eq!(raw.lock(), OsalRsBool::True);
     assert_eq!(raw.lock(), OsalRsBool::True);
     assert_eq!(raw.lock(), OsalRsBool::True);
 
+    // Partial unlock: 2 unlocks — mutex still held (recursion > 0)
     assert_eq!(raw.unlock(), OsalRsBool::True);
     assert_eq!(raw.unlock(), OsalRsBool::True);
+
+    // Cross-thread check: another thread must NOT be able to acquire it
+    {
+        let raw_clone = Arc::clone(&raw);
+        let handle = thread::spawn(move || {
+            // should fail because main thread still holds the mutex
+            raw_clone.lock_from_isr()
+        });
+        assert_eq!(handle.join().unwrap(), OsalRsBool::False);
+    }
+
+    // Final unlock — recursion reaches zero, mutex fully released
     assert_eq!(raw.unlock(), OsalRsBool::True);
+
+    // Extra unlock on a free mutex should fail
+    assert_eq!(raw.unlock(), OsalRsBool::False);
+
+    // Cross-thread check: another thread should now succeed
+    {
+        let raw_clone2 = Arc::clone(&raw);
+        let handle2 = thread::spawn(move || {
+            let result = raw_clone2.lock_from_isr();
+            if result == OsalRsBool::True {
+                raw_clone2.unlock_from_isr();
+            }
+            result
+        });
+        assert_eq!(handle2.join().unwrap(), OsalRsBool::True);
+    }
 
     log_info!(TAG, "test_raw_mutex_recursive PASSED");
     Ok(())
