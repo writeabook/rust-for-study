@@ -22,6 +22,13 @@
 //!   `StdMutexGuard`. `Drop` first clears the owner, then releases
 //!   the stdlib guard (reliable, no `RawMutex::unlock` involved).
 //!
+//! # Handles
+//!
+//! Linux mutexes expose unique, monotonically increasing handle IDs
+//! (cast to `MutexHandle = *const c_void`) for API-surface compatibility
+//! with the FreeRTOS backend. These handles are not dereferencable
+//! pointers and must only be used for comparison / diagnostics.
+//!
 //! # ISR path (host simulation only)
 //!
 //! Linux has no real interrupt context. `lock_from_isr` / `unlock_from_isr`
@@ -40,6 +47,7 @@
 
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use std::sync::{Condvar, Mutex as StdMutex, MutexGuard as StdMutexGuard, TryLockError};
@@ -58,6 +66,17 @@ fn recover_lock<T>(result: std::sync::LockResult<T>) -> T {
         Ok(value) => value,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+/// Monotonically increasing handle counter.
+///
+/// Returns a unique `MutexHandle` for each Linux mutex object.  The
+/// returned pointer is **not** dereferencable — it only serves as an
+/// opaque ID for API-surface compatibility with the FreeRTOS backend.
+static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(1);
+
+fn next_handle() -> MutexHandle {
+    NEXT_HANDLE.fetch_add(1, Ordering::Relaxed) as MutexHandle
 }
 
 // ===========================================================================
@@ -91,7 +110,7 @@ impl Display for RawMutex {
 
 impl RawMutex {
     pub fn new() -> Result<Self> {
-        Ok(Self { inner: StdMutex::new(RawMutexState { owner: None, recursion: 0 }), condvar: Condvar::new(), handle: 1 as MutexHandle })
+        Ok(Self { inner: StdMutex::new(RawMutexState { owner: None, recursion: 0 }), condvar: Condvar::new(), handle: next_handle() })
     }
 }
 
@@ -106,7 +125,10 @@ impl RawMutexFn for RawMutex {
         let mut state = recover_lock(self.inner.lock());
         let current = std::thread::current().id();
         if state.owner == Some(current) {
-            state.recursion = state.recursion.saturating_add(1);
+            match state.recursion.checked_add(1) {
+                Some(next) => { state.recursion = next; }
+                None => return OsalRsBool::False,
+            }
             OsalRsBool::True
         } else {
             while state.owner.is_some() {
@@ -126,7 +148,10 @@ impl RawMutexFn for RawMutex {
         };
         let current = std::thread::current().id();
         if guard.owner == Some(current) {
-            guard.recursion = guard.recursion.saturating_add(1);
+            match guard.recursion.checked_add(1) {
+                Some(next) => { guard.recursion = next; }
+                None => return OsalRsBool::False,
+            }
             OsalRsBool::True
         } else if guard.owner.is_none() {
             guard.owner = Some(current);
@@ -186,7 +211,7 @@ impl<T: ?Sized> Deref for Mutex<T> {
 
 impl<T> Mutex<T> {
     pub fn new(data: T) -> Self {
-        Self { owner: StdMutex::new(None), data: Box::new(StdMutex::new(data)), handle: 1 as MutexHandle }
+        Self { owner: StdMutex::new(None), data: Box::new(StdMutex::new(data)), handle: next_handle() }
     }
     pub fn new_arc(data: T) -> Arc<Self> { Arc::new(Self::new(data)) }
 }
