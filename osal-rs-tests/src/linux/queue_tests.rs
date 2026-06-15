@@ -1,23 +1,3 @@
-/***************************************************************************
- *
- * osal-rs
- * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <https://www.gnu.org/licenses/>.
- *
- ***************************************************************************/
-
 //! Linux-specific queue tests.
 //!
 //! These tests verify the fixed-length message contract enforced by the
@@ -27,7 +7,12 @@
 
 extern crate alloc;
 
+use core::time::Duration;
+use alloc::sync::Arc;
+use std::sync::Mutex as StdMutex;
+
 use osal_rs::os::*;
+use osal_rs::os::types::TickType;
 use osal_rs::utils::{Error, Result};
 use osal_rs::log_info;
 
@@ -470,29 +455,160 @@ pub fn test_queue_streamed_serde_isr_round_trip() -> Result<()> {
 }
 
 // ===========================================================================
+// Close lifecycle tests
+// ===========================================================================
+
+pub fn test_queue_close_wakes_blocked_consumer() -> Result<()> {
+    log_info!(TAG, "Starting test_queue_close_wakes_blocked_consumer");
+    use std::thread;
+    let queue = Arc::new(Queue::new(1, 4)?);
+
+    let q = Arc::clone(&queue);
+    let handle = thread::spawn(move || {
+        let mut buf = [0u8; 4];
+        q.fetch(&mut buf, TickType::MAX)
+    });
+
+    thread::sleep(Duration::from_millis(10));
+    queue.close();
+    assert_eq!(handle.join().unwrap(), Err(Error::QueueClosed));
+    log_info!(TAG, "test_queue_close_wakes_blocked_consumer PASSED");
+    Ok(())
+}
+
+pub fn test_queue_close_wakes_blocked_producer() -> Result<()> {
+    log_info!(TAG, "Starting test_queue_close_wakes_blocked_producer");
+    use std::thread;
+    let queue = Arc::new(Queue::new(1, 4)?);
+    queue.post(&[1u8; 4], 0)?;
+
+    let q = Arc::clone(&queue);
+    let handle = thread::spawn(move || {
+        q.post(&[2u8; 4], TickType::MAX)
+    });
+
+    thread::sleep(Duration::from_millis(10));
+    queue.close();
+    assert_eq!(handle.join().unwrap(), Err(Error::QueueClosed));
+    log_info!(TAG, "test_queue_close_wakes_blocked_producer PASSED");
+    Ok(())
+}
+
+pub fn test_queue_all_ops_fail_after_close() -> Result<()> {
+    log_info!(TAG, "Starting test_queue_all_ops_fail_after_close");
+    let queue = Queue::new(2, 4)?;
+    queue.post(&[1u8; 4], 0)?;
+    queue.close();
+
+    assert_eq!(queue.post(&[2u8; 4], 0), Err(Error::QueueClosed));
+    assert_eq!(queue.fetch(&mut [0u8; 4], 0), Err(Error::QueueClosed));
+    assert_eq!(queue.post_from_isr(&[3u8; 4]), Err(Error::QueueClosed));
+    assert_eq!(queue.fetch_from_isr(&mut [0u8; 4]), Err(Error::QueueClosed));
+    log_info!(TAG, "test_queue_all_ops_fail_after_close PASSED");
+    Ok(())
+}
+
+pub fn test_queue_close_idempotent() -> Result<()> {
+    log_info!(TAG, "Starting test_queue_close_idempotent");
+    let queue = Queue::new(1, 4)?;
+    queue.close();
+    queue.close();
+    queue.close();
+    // ops still return QueueClosed, not panic
+    assert_eq!(queue.post(&[1u8; 4], 0), Err(Error::QueueClosed));
+    log_info!(TAG, "test_queue_close_idempotent PASSED");
+    Ok(())
+}
+
+// ===========================================================================
+// Phase 2: Handle uniqueness
+// ===========================================================================
+
+pub fn test_queue_unique_handles() -> Result<()> {
+    log_info!(TAG, "Starting test_queue_unique_handles");
+    let q1 = Queue::new(1, 4)?;
+    let q2 = Queue::new(1, 4)?;
+    assert_ne!(*q1, *q2, "different queues must have different handles");
+    log_info!(TAG, "test_queue_unique_handles PASSED");
+    Ok(())
+}
+
+// ===========================================================================
+// Phase 2: Multi-producer/consumer liveness
+// ===========================================================================
+
+pub fn test_queue_multi_producer_consumer() -> Result<()> {
+    log_info!(TAG, "Starting test_queue_multi_producer_consumer");
+    use std::thread;
+    let queue = Arc::new(Queue::new(4, 4)?);
+    const THREADS: usize = 4;
+    const ITERS: u32 = 250;
+
+    let mut producers = vec![];
+    for id in 0..THREADS {
+        let q = Arc::clone(&queue);
+        producers.push(thread::spawn(move || {
+            for i in 0..ITERS {
+                let data = (id as u32).to_le_bytes();
+                q.post(&data, TickType::MAX).unwrap();
+            }
+        }));
+    }
+
+    let mut consumers = vec![];
+    let total = Arc::new(StdMutex::new(0u32));
+    for _ in 0..THREADS {
+        let q = Arc::clone(&queue);
+        let t = Arc::clone(&total);
+        consumers.push(thread::spawn(move || {
+            let mut buf = [0u8; 4];
+            loop {
+                match q.fetch(&mut buf, TickType::MAX) {
+                    Ok(()) => {
+                        *t.lock().unwrap() += 1;
+                    }
+                    Err(Error::QueueClosed) => break,
+                    Err(_) => break,
+                }
+            }
+        }));
+    }
+
+    for p in producers { p.join().unwrap(); }
+    queue.close();
+    for c in consumers { c.join().unwrap(); }
+
+    assert_eq!(*total.lock().unwrap(), THREADS as u32 * ITERS);
+    log_info!(TAG, "test_queue_multi_producer_consumer PASSED");
+    Ok(())
+}
+
+// ===========================================================================
 // Run all tests
 // ===========================================================================
 
 pub fn run_all_tests() -> Result<()> {
     log_info!(TAG, "========== Running Linux-Specific Queue Tests ==========");
 
-    // Raw Queue length-contract tests
     test_queue_exact_message_size()?;
     test_queue_post_too_short_rejected()?;
     test_queue_post_too_long_rejected()?;
     test_queue_fetch_buffer_too_short_does_not_consume()?;
     test_queue_fetch_buffer_too_long_rejected()?;
-
-    // ISR path length-contract tests
     test_queue_isr_post_too_short()?;
     test_queue_isr_post_too_long()?;
     test_queue_isr_fetch_buffer_too_short()?;
     test_queue_isr_fetch_buffer_too_long()?;
-
-    // Error propagation
     test_queue_propagates_underlying_error()?;
 
-    // Non-serde QueueStreamed tests
+    // Phase 2
+    test_queue_close_wakes_blocked_consumer()?;
+    test_queue_close_wakes_blocked_producer()?;
+    test_queue_all_ops_fail_after_close()?;
+    test_queue_close_idempotent()?;
+    test_queue_unique_handles()?;
+    test_queue_multi_producer_consumer()?;
+
     #[cfg(not(feature = "serde"))]
     {
         test_queue_streamed_round_trip()?;
@@ -502,7 +618,6 @@ pub fn run_all_tests() -> Result<()> {
         test_queue_streamed_broken_len_consistency()?;
     }
 
-    // Serde QueueStreamed tests
     #[cfg(feature = "serde")]
     {
         test_queue_streamed_serde_round_trip()?;

@@ -3,40 +3,38 @@
 //! # Overview
 //!
 //! Implements the `QueueFn` trait using `std::sync::Mutex<QueueInner>` +
-//! `std::sync::Condvar`.  The queue is a bounded FIFO that stores messages
-//! as `Vec<u8>` copies, matching the FreeRTOS queue contract.
+//! two `Condvar`s. The queue is a bounded FIFO that stores messages as
+//! `Vec<u8>` copies.
 //!
 //! # Design
 //!
-//! - **State**: A `StdMutex<QueueInner>` holds a `VecDeque<Vec<u8>>` buffer,
-//!   capacity, message size, and a closed flag.
+//! - **Dual Condvars**: `not_empty` for consumers; `not_full` for
+//!   producers. Post success wakes a consumer on `not_empty`; fetch
+//!   success wakes a producer on `not_full`.
 //! - **Blocking send/receive**: `post(timeout)` and `fetch(timeout)` use
-//!   `Condvar::wait` / `wait_timeout` with deadline loops.
+//!   `Condvar::wait` (MAX = indefinite) or `wait_timeout` (finite).
 //! - **ISR emulation**: `post_from_isr()` / `fetch_from_isr()` use
-//!   `StdMutex::try_lock` — non-blocking, return immediately.
-//! - **RAII**: `Drop` calls `delete()` which sets the closed flag and
-//!   notifies all waiters.
+//!   `StdMutex::try_lock` — non-blocking. `TryLockError::Poisoned` is
+//!   recovered transparently.
+//! - **Close lifecycle**: `close(&self)` can be called through `Arc`.
+//!   `delete(&mut self)` and `Drop` delegate to `close()`.
+//! - **RAII Poison recovery**: `recover_lock()` unwraps poisoned mutexes
+//!   so that the Queue remains usable after a panic.
 //!
 //! # Fixed-length message contract
 //!
-//! Each slot in the queue stores exactly `message_size` bytes.  Senders
-//! MUST provide a slice of length `message_size`; receivers MUST provide
-//! a buffer of length `message_size`.  Violations return
-//! [`Error::InvalidMessageSize`] immediately, without modifying queue state.
-//!
-//! # Contract
-//!
-//! See `doc/osal-contact-zh.md` §7 for the detailed behavioural
-//! specification.
+//! Each slot stores exactly `message_size` bytes. Senders and receivers
+//! must use slices of that exact length.
 
 use core::fmt::{Debug, Display};
 use core::marker::PhantomData;
 use core::ops::Deref;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
 use alloc::vec::Vec;
 use std::collections::VecDeque;
-use std::sync::{Condvar, Mutex as StdMutex};
+use std::sync::{Condvar, Mutex as StdMutex, TryLockError};
 use std::time::Instant;
 
 #[cfg(not(feature = "serde"))]
@@ -53,7 +51,7 @@ use super::types::{QueueHandle, TickType, UBaseType};
 use crate::utils::{Error, Result, MAX_DELAY};
 
 // ---------------------------------------------------------------------------
-// StructSerde — helper trait bound (mirrors freertos/queue.rs)
+// StructSerde — helper trait bound
 // ---------------------------------------------------------------------------
 
 #[cfg(not(feature = "serde"))]
@@ -69,7 +67,7 @@ pub trait StructSerde: Serialize + Deserialize + BytesHasLen {}
 impl<T> StructSerde for T where T: Serialize + Deserialize + BytesHasLen {}
 
 // ---------------------------------------------------------------------------
-// QueueInner — shared state behind the mutex
+// QueueInner
 // ---------------------------------------------------------------------------
 
 struct QueueInner {
@@ -80,97 +78,49 @@ struct QueueInner {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: validate message / buffer size against the queue's message_size
+// Helpers
 // ---------------------------------------------------------------------------
 
 #[inline]
 fn validate_message_size(expected: usize, actual: usize) -> Result<()> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(Error::InvalidMessageSize)
+    if actual == expected { Ok(()) } else { Err(Error::InvalidMessageSize) }
+}
+
+fn recover_lock<T>(result: std::sync::LockResult<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
+static NEXT_QUEUE_HANDLE: AtomicUsize = AtomicUsize::new(1);
+
+fn next_queue_handle() -> QueueHandle {
+    NEXT_QUEUE_HANDLE.fetch_add(1, Ordering::Relaxed) as QueueHandle
+}
+
 // ---------------------------------------------------------------------------
-// Queue — byte-based FIFO queue
+// Queue
 // ---------------------------------------------------------------------------
 
-/// A FIFO queue for byte-based message passing.
-///
-/// Provides a thread-safe queue implementation for sending and receiving
-/// raw byte slices between threads. Supports both blocking and ISR-safe
-/// operations.
-///
-/// Internally uses `VecDeque<Vec<u8>>` with a `Mutex` + `Condvar` for
-/// thread-safe, blocking FIFO semantics.
-///
-/// # Fixed-length messages
-///
-/// The queue enforces that every posted slice and every receive buffer
-/// has exactly the length specified by `message_size` at creation time.
-/// Providing a different length returns `Error::InvalidMessageSize`
-/// without modifying queue state.
-///
-/// # Examples
-///
-/// ```ignore
-/// use osal_rs::os::{Queue, QueueFn};
-/// use core::time::Duration;
-///
-/// // Create a queue with 10 slots, each 32 bytes
-/// let queue = Queue::new(10, 32).unwrap();
-///
-/// // Send data
-/// let data = [1u8; 32];
-/// queue.post(&data, Duration::from_millis(100).to_ticks()).unwrap();
-///
-/// // Receive data
-/// let mut buffer = [0u8; 32];
-/// queue.fetch(&mut buffer, Duration::from_millis(100).to_ticks()).unwrap();
-/// ```
 pub struct Queue {
     inner: StdMutex<QueueInner>,
-    condvar: Condvar,
+    not_empty: Condvar,
+    not_full: Condvar,
     handle: QueueHandle,
 }
 
-// Safety: StdMutex + Condvar are Send + Sync.
 unsafe impl Send for Queue {}
 unsafe impl Sync for Queue {}
 
 impl Deref for Queue {
     type Target = QueueHandle;
-    fn deref(&self) -> &Self::Target {
-        &self.handle
-    }
+    fn deref(&self) -> &Self::Target { &self.handle }
 }
 
 impl Queue {
-    /// Creates a new queue.
-    ///
-    /// # Parameters
-    ///
-    /// * `size` — Maximum number of messages the queue can hold.
-    /// * `message_size` — Size in bytes of each message.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Self)` — Successfully created queue.
-    /// * `Err(Error::OutOfMemory)` — Invalid size or message_size (zero).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use osal_rs::os::{Queue, QueueFn};
-    ///
-    /// // Queue for 5 messages of 16 bytes each
-    /// let queue = Queue::new(5, 16).unwrap();
-    /// ```
     pub fn new(size: UBaseType, message_size: UBaseType) -> Result<Self> {
-        if size == 0 || message_size == 0 {
-            return Err(Error::OutOfMemory);
-        }
+        if size == 0 || message_size == 0 { return Err(Error::OutOfMemory); }
         Ok(Self {
             inner: StdMutex::new(QueueInner {
                 buffer: VecDeque::with_capacity(size as usize),
@@ -178,326 +128,219 @@ impl Queue {
                 message_size: message_size as usize,
                 closed: false,
             }),
-            condvar: Condvar::new(),
-            handle: 1 as QueueHandle,
+            not_empty: Condvar::new(),
+            not_full: Condvar::new(),
+            handle: next_queue_handle(),
         })
     }
 
-    // -----------------------------------------------------------------------
-    // Convenience methods with ToTick conversion
-    // -----------------------------------------------------------------------
+    /// Close the queue, waking all blocked threads.
+    ///
+    /// Idempotent — calling multiple times is safe. After closing,
+    /// all send/receive operations return [`Error::QueueClosed`].
+    pub fn close(&self) {
+        let mut state = recover_lock(self.inner.lock());
+        if state.closed { return; }
+        state.closed = true;
+        state.buffer.clear();
+        drop(state);
+        self.not_empty.notify_all();
+        self.not_full.notify_all();
+    }
 
-    /// Receives data from the queue with a convertible timeout.
-    ///
-    /// This is a convenience method that accepts any type implementing `ToTick`
-    /// (like `Duration`) and converts it to ticks before calling `fetch()`.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` — Mutable slice to receive data into.
-    /// * `time` — Timeout value (e.g., `Duration::from_millis(100)`).
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Data successfully received.
-    /// * `Err(Error::Timeout)` — No data available within timeout.
     #[inline]
     pub fn fetch_with_to_tick(&self, buffer: &mut [u8], time: impl ToTick) -> Result<()> {
         self.fetch(buffer, time.to_ticks())
     }
 
-    /// Sends data to the queue with a convertible timeout.
-    ///
-    /// This is a convenience method that accepts any type implementing `ToTick`
-    /// (like `Duration`) and converts it to ticks before calling `post()`.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` — Slice of data to send.
-    /// * `time` — Timeout value (e.g., `Duration::from_millis(100)`).
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Data successfully sent.
-    /// * `Err(Error::Timeout)` — Queue full, could not send within timeout.
     #[inline]
     pub fn post_with_to_tick(&self, item: &[u8], time: impl ToTick) -> Result<()> {
         self.post(item, time.to_ticks())
     }
+
+    // ISR helper: try_lock with poison recovery
+    fn try_lock_state(&self) -> Result<std::sync::MutexGuard<'_, QueueInner>> {
+        match self.inner.try_lock() {
+            Ok(state) => Ok(state),
+            Err(TryLockError::Poisoned(err)) => Ok(err.into_inner()),
+            Err(TryLockError::WouldBlock) => Err(Error::Timeout),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
-// QueueFn trait implementation
+// QueueFn
 // ---------------------------------------------------------------------------
 
 impl QueueFn for Queue {
-    /// Receives data from the queue, blocking until data is available or timeout.
-    ///
-    /// This function blocks the calling thread until data is available or the
-    /// specified timeout expires.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` — Mutable byte slice to receive data into. Must have length
-    ///   equal to the queue's `message_size`.
-    /// * `time` — Timeout in system ticks (0 = no wait, MAX = wait forever).
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Data successfully received into buffer.
-    /// * `Err(Error::Timeout)` — No data available within timeout period.
-    /// * `Err(Error::InvalidMessageSize)` — `buffer.len() != message_size`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use osal_rs::os::{Queue, QueueFn};
-    ///
-    /// let queue = Queue::new(5, 16).unwrap();
-    /// let mut buffer = [0u8; 16];
-    ///
-    /// // Wait up to 1000 ticks for data
-    /// match queue.fetch(&mut buffer, 1000) {
-    ///     Ok(()) => println!("Received data: {:?}", buffer),
-    ///     Err(_) => println!("Timeout"),
-    /// }
-    /// ```
-    fn fetch(&self, buffer: &mut [u8], time: TickType) -> Result<()> {
-        let mut state = self.inner.lock().unwrap();
-
-        validate_message_size(state.message_size, buffer.len())?;
-
-        // Fast path: data available — dequeue and return.
-        if let Some(item) = state.buffer.pop_front() {
-            debug_assert_eq!(item.len(), state.message_size);
-            buffer.copy_from_slice(&item);
-            self.condvar.notify_one(); // wake a potential blocked sender
-            return Ok(());
-        }
-
-        // Queue is empty — check if we should block.
-        if time == 0 {
-            return Err(Error::Timeout);
-        }
-
-        // Convert ticks to Duration for Condvar.
-        let timeout = if time == TickType::MAX {
-            MAX_DELAY
-        } else {
-            // ticks are in milliseconds (TICK_PERIOD_MS = 1)
-            Duration::from_millis(time as u64)
-        };
-
-        let deadline = Instant::now() + timeout;
-        loop {
-            let elapsed = Instant::now();
-            if elapsed >= deadline {
-                return Err(Error::Timeout);
-            }
-            let remaining = deadline - elapsed;
-
-            state = self.condvar.wait_timeout(state, remaining).unwrap().0;
-
-            // Check if queue was closed (deletion).
-            if state.closed {
-                return Err(Error::Timeout);
-            }
-
-            if let Some(item) = state.buffer.pop_front() {
-                debug_assert_eq!(item.len(), state.message_size);
-                buffer.copy_from_slice(&item);
-                self.condvar.notify_one(); // wake a potential blocked sender
-                return Ok(());
-            }
-
-            // Spurious wakeup — loop again with updated remaining time.
-        }
-    }
-
-    /// Receives data from the queue without blocking (ISR-friendly).
-    ///
-    /// On Linux this is a non-blocking try-receive using `StdMutex::try_lock`.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` — Mutable byte slice to receive data into. Must have length
-    ///   equal to the queue's `message_size`.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Data successfully received.
-    /// * `Err(Error::Timeout)` — Queue is empty or lock busy.
-    /// * `Err(Error::InvalidMessageSize)` — `buffer.len() != message_size`.
-    fn fetch_from_isr(&self, buffer: &mut [u8]) -> Result<()> {
-        match self.inner.try_lock() {
-            Ok(mut state) => {
-                validate_message_size(state.message_size, buffer.len())?;
-
-                if let Some(item) = state.buffer.pop_front() {
-                    debug_assert_eq!(item.len(), state.message_size);
-                    buffer.copy_from_slice(&item);
-                    self.condvar.notify_one();
-                    Ok(())
-                } else {
-                    Err(Error::Timeout)
-                }
-            }
-            Err(_) => Err(Error::Timeout),
-        }
-    }
-
-    /// Sends data to the back of the queue, blocking until space is available.
-    ///
-    /// This function blocks the calling thread until space becomes available
-    /// or the timeout expires.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` — Byte slice to send. Must have length equal to the queue's
-    ///   `message_size`.
-    /// * `time` — Timeout in system ticks (0 = no wait, MAX = wait forever).
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Data successfully sent.
-    /// * `Err(Error::Timeout)` — Queue full, could not send within timeout.
-    /// * `Err(Error::InvalidMessageSize)` — `item.len() != message_size`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use osal_rs::os::{Queue, QueueFn};
-    ///
-    /// let queue = Queue::new(5, 16).unwrap();
-    /// let data = [0xAA; 16];
-    ///
-    /// // Wait up to 1000 ticks to send
-    /// queue.post(&data, 1000)?;
-    /// ```
     fn post(&self, item: &[u8], time: TickType) -> Result<()> {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = recover_lock(self.inner.lock());
+
+        // closed check first
+        if state.closed { return Err(Error::QueueClosed); }
 
         validate_message_size(state.message_size, item.len())?;
 
-        // Fast path: queue not full — push and return.
+        // Fast path
         if state.buffer.len() < state.capacity {
             state.buffer.push_back(item.to_vec());
-            self.condvar.notify_one(); // wake a potential blocked receiver
+            drop(state);
+            self.not_empty.notify_one();
             return Ok(());
         }
 
-        // Queue is full — check if we should block.
-        if time == 0 {
-            return Err(Error::Timeout);
+        if time == 0 { return Err(Error::Timeout); }
+
+        // Indefinite wait
+        if time == TickType::MAX {
+            loop {
+                if state.closed { return Err(Error::QueueClosed); }
+                if state.buffer.len() < state.capacity {
+                    state.buffer.push_back(item.to_vec());
+                    drop(state);
+                    self.not_empty.notify_one();
+                    return Ok(());
+                }
+                state = recover_lock(self.not_full.wait(state));
+            }
         }
 
-        // Convert ticks to Duration for Condvar.
-        let timeout = if time == TickType::MAX {
-            MAX_DELAY
-        } else {
-            Duration::from_millis(time as u64)
-        };
+        // Finite wait
+        let timeout = Duration::from_millis(time as u64);
+        let deadline = Instant::now().checked_add(timeout).ok_or(Error::Timeout)?;
 
-        let deadline = Instant::now() + timeout;
         loop {
-            let elapsed = Instant::now();
-            if elapsed >= deadline {
-                return Err(Error::Timeout);
-            }
-            let remaining = deadline - elapsed;
-
-            state = self.condvar.wait_timeout(state, remaining).unwrap().0;
-
-            // Check if queue was closed (deletion).
-            if state.closed {
-                return Err(Error::Timeout);
-            }
-
+            if state.closed { return Err(Error::QueueClosed); }
             if state.buffer.len() < state.capacity {
                 state.buffer.push_back(item.to_vec());
-                self.condvar.notify_one(); // wake a potential blocked receiver
+                drop(state);
+                self.not_empty.notify_one();
                 return Ok(());
             }
 
-            // Spurious wakeup — loop again.
-        }
-    }
+            let now = Instant::now();
+            if now >= deadline { return Err(Error::Timeout); }
+            let remaining = deadline - now;
 
-    /// Sends data to the queue without blocking (ISR-friendly).
-    ///
-    /// On Linux this uses `StdMutex::try_lock`. If the lock cannot be
-    /// acquired immediately the call returns `Err(Error::Timeout)`.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` — Byte slice to send. Must have length equal to the queue's
-    ///   `message_size`.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Data successfully sent.
-    /// * `Err(Error::Timeout)` — Queue is full or lock busy.
-    /// * `Err(Error::InvalidMessageSize)` — `item.len() != message_size`.
-    fn post_from_isr(&self, item: &[u8]) -> Result<()> {
-        match self.inner.try_lock() {
-            Ok(mut state) => {
-                validate_message_size(state.message_size, item.len())?;
+            let (next_state, timeout_result) = recover_lock(self.not_full.wait_timeout(state, remaining));
+            state = next_state;
 
-                if state.buffer.len() < state.capacity {
-                    state.buffer.push_back(item.to_vec());
-                    self.condvar.notify_one();
-                    Ok(())
-                } else {
-                    Err(Error::Timeout)
-                }
+            if timeout_result.timed_out() && state.buffer.len() >= state.capacity && !state.closed {
+                return Err(Error::Timeout);
             }
-            Err(_) => Err(Error::Timeout),
         }
     }
 
-    /// Deletes the queue and frees its resources.
-    ///
-    /// Sets the closed flag and notifies all waiting threads so they can
-    /// unblock. Memory is reclaimed when `self` is dropped (RAII).
-    ///
-    /// # Safety
-    ///
-    /// Ensure no threads are blocked on this queue before deletion.
-    /// Calling this while tasks are waiting will cause them to be woken
-    /// with an error.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use osal_rs::os::{Queue, QueueFn};
-    ///
-    /// let mut queue = Queue::new(5, 16).unwrap();
-    /// // Use the queue...
-    /// queue.delete();
-    /// ```
-    fn delete(&mut self) {
-        if let Ok(mut state) = self.inner.lock() {
-            state.closed = true;
-            self.condvar.notify_all();
+    fn post_from_isr(&self, item: &[u8]) -> Result<()> {
+        let mut state = self.try_lock_state()?;
+
+        if state.closed { return Err(Error::QueueClosed); }
+
+        validate_message_size(state.message_size, item.len())?;
+
+        if state.buffer.len() < state.capacity {
+            state.buffer.push_back(item.to_vec());
+            drop(state);
+            self.not_empty.notify_one();
+            Ok(())
+        } else {
+            Err(Error::Timeout)
         }
+    }
+
+    fn fetch(&self, buffer: &mut [u8], time: TickType) -> Result<()> {
+        let mut state = recover_lock(self.inner.lock());
+
+        if state.closed { return Err(Error::QueueClosed); }
+
+        validate_message_size(state.message_size, buffer.len())?;
+
+        // Fast path
+        if let Some(item) = state.buffer.pop_front() {
+            debug_assert_eq!(item.len(), state.message_size);
+            buffer.copy_from_slice(&item);
+            drop(state);
+            self.not_full.notify_one();
+            return Ok(());
+        }
+
+        if time == 0 { return Err(Error::Timeout); }
+
+        // Indefinite wait
+        if time == TickType::MAX {
+            loop {
+                if state.closed { return Err(Error::QueueClosed); }
+                if let Some(item) = state.buffer.pop_front() {
+                    debug_assert_eq!(item.len(), state.message_size);
+                    buffer.copy_from_slice(&item);
+                    drop(state);
+                    self.not_full.notify_one();
+                    return Ok(());
+                }
+                state = recover_lock(self.not_empty.wait(state));
+            }
+        }
+
+        // Finite wait
+        let timeout = Duration::from_millis(time as u64);
+        let deadline = Instant::now().checked_add(timeout).ok_or(Error::Timeout)?;
+
+        loop {
+            if state.closed { return Err(Error::QueueClosed); }
+            if let Some(item) = state.buffer.pop_front() {
+                debug_assert_eq!(item.len(), state.message_size);
+                buffer.copy_from_slice(&item);
+                drop(state);
+                self.not_full.notify_one();
+                return Ok(());
+            }
+
+            let now = Instant::now();
+            if now >= deadline { return Err(Error::Timeout); }
+            let remaining = deadline - now;
+
+            let (next_state, timeout_result) = recover_lock(self.not_empty.wait_timeout(state, remaining));
+            state = next_state;
+
+            if timeout_result.timed_out() && state.buffer.is_empty() && !state.closed {
+                return Err(Error::Timeout);
+            }
+        }
+    }
+
+    fn fetch_from_isr(&self, buffer: &mut [u8]) -> Result<()> {
+        let mut state = self.try_lock_state()?;
+
+        if state.closed { return Err(Error::QueueClosed); }
+
+        validate_message_size(state.message_size, buffer.len())?;
+
+        if let Some(item) = state.buffer.pop_front() {
+            debug_assert_eq!(item.len(), state.message_size);
+            buffer.copy_from_slice(&item);
+            drop(state);
+            self.not_full.notify_one();
+            Ok(())
+        } else {
+            Err(Error::Timeout)
+        }
+    }
+
+    fn delete(&mut self) {
+        self.close();
     }
 }
 
-// ---------------------------------------------------------------------------
-// Trait impls for Queue
-// ---------------------------------------------------------------------------
-
 impl Drop for Queue {
     fn drop(&mut self) {
-        self.delete();
+        self.close();
     }
 }
 
 impl Debug for Queue {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.inner.try_lock() {
-            Ok(state) => f
-                .debug_struct("Queue")
+            Ok(state) => f.debug_struct("Queue")
                 .field("len", &state.buffer.len())
                 .field("capacity", &state.capacity)
                 .field("message_size", &state.message_size)
@@ -511,115 +354,34 @@ impl Debug for Queue {
 impl Display for Queue {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.inner.try_lock() {
-            Ok(state) => write!(
-                f,
-                "Queue {{ len: {}, capacity: {}, msg_size: {} }}",
-                state.buffer.len(),
-                state.capacity,
-                state.message_size
-            ),
+            Ok(state) => write!(f, "Queue {{ len: {}, capacity: {}, msg_size: {} }}",
+                state.buffer.len(), state.capacity, state.message_size),
             Err(_) => write!(f, "Queue {{ <locked> }}"),
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// QueueStreamed<T> — type-safe FIFO queue
+// QueueStreamed<T>
 // ---------------------------------------------------------------------------
 
-/// A type-safe FIFO queue for message passing.
-///
-/// Unlike [`Queue`], which works with raw byte slices, `QueueStreamed` provides
-/// a type-safe interface for sending and receiving structured data. The type must
-/// implement serialization traits.
-///
-/// # Type Parameters
-///
-/// * `T` — The message type. Must implement `StructSerde`
-///   (`Serialize + BytesHasLen + Deserialize`).
-///
-/// # Examples
-///
-/// ```ignore
-/// use osal_rs::os::{QueueStreamed, QueueStreamedFn};
-/// use core::time::Duration;
-///
-/// #[derive(Debug, Clone, Copy)]
-/// struct Message {
-///     id: u32,
-///     value: i16,
-/// }
-///
-/// // Assuming Message implements the required traits
-/// let queue: QueueStreamed<Message> = QueueStreamed::new(10, size_of::<Message>()).unwrap();
-///
-/// // Send a message
-/// let msg = Message { id: 1, value: 42 };
-/// queue.post_with_to_tick(&msg, Duration::from_millis(100)).unwrap();
-///
-/// // Receive a message
-/// let mut received = Message { id: 0, value: 0 };
-/// queue.fetch_with_to_tick(&mut received, Duration::from_millis(100)).unwrap();
-/// assert_eq!(received.id, 1);
-/// assert_eq!(received.value, 42);
-/// ```
 pub struct QueueStreamed<T: StructSerde>(Queue, PhantomData<T>);
 
 unsafe impl<T: StructSerde> Send for QueueStreamed<T> {}
 unsafe impl<T: StructSerde> Sync for QueueStreamed<T> {}
 
-impl<T> QueueStreamed<T>
-where
-    T: StructSerde,
-{
-    /// Creates a new type-safe queue.
-    ///
-    /// # Parameters
-    ///
-    /// * `size` — Maximum number of messages.
-    /// * `message_size` — Size of each message (typically `size_of::<T>()`).
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Self)` — Successfully created queue.
-    /// * `Err(Error)` — Creation failed.
+impl<T> QueueStreamed<T> where T: StructSerde {
     #[inline]
     pub fn new(size: UBaseType, message_size: UBaseType) -> Result<Self> {
         Ok(Self(Queue::new(size, message_size)?, PhantomData))
     }
 
-    /// Receives a typed message with a convertible timeout.
-    ///
-    /// This is a convenience method that accepts any type implementing `ToTick`.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` — Mutable reference to receive the message into.
-    /// * `time` — Timeout value (e.g., `Duration::from_millis(100)`).
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully received and deserialized.
-    /// * `Err(Error)` — Timeout or deserialization error.
     #[allow(dead_code)]
     #[inline]
     fn fetch_with_to_tick(&self, buffer: &mut T, time: impl ToTick) -> Result<()> {
         self.fetch(buffer, time.to_ticks())
     }
 
-    /// Sends a typed message with a convertible timeout.
-    ///
-    /// This is a convenience method that accepts any type implementing `ToTick`.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` — Reference to the message to send.
-    /// * `time` — Timeout value (e.g., `Duration::from_millis(100)`).
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully serialized and sent.
-    /// * `Err(Error)` — Timeout or serialization error.
     #[inline]
     #[allow(dead_code)]
     fn post_with_to_tick(&self, item: &T, time: impl ToTick) -> Result<()> {
@@ -627,261 +389,85 @@ where
     }
 }
 
-// ---------------------------------------------------------------------------
-// QueueStreamedFn impl — without serde feature (custom traits)
-// ---------------------------------------------------------------------------
-
+// Non-serde QueueStreamedFn
 #[cfg(not(feature = "serde"))]
-impl<T> QueueStreamedFn<T> for QueueStreamed<T>
-where
-    T: StructSerde,
-{
-    /// Receives a typed message from the queue (without serde feature).
-    ///
-    /// Deserializes the message from bytes using the custom serialization traits.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` — Mutable reference to receive the deserialized message.
-    /// * `time` — Timeout in system ticks.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully received and deserialized.
-    /// * `Err(Error::Timeout)` — Queue empty or timeout.
-    /// * `Err(Error::InvalidMessageSize)` — Buffer length mismatch.
-    /// * `Err(Error)` — Deserialization error.
-    fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
-        let mut buf_bytes = vec![0u8; buffer.len()];
-        self.0.fetch(&mut buf_bytes, time)?;
-        *buffer = T::from_bytes(&buf_bytes)?;
-        Ok(())
-    }
-
-    /// Receives a typed message from ISR context (without serde feature).
-    ///
-    /// ISR-safe version that does not block. Deserializes the message from bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` — Mutable reference to receive the deserialized message.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully received and deserialized.
-    /// * `Err(Error::Timeout)` — Queue is empty.
-    /// * `Err(Error::InvalidMessageSize)` — Buffer length mismatch.
-    /// * `Err(Error)` — Deserialization error.
-    fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
-        let mut buf_bytes = vec![0u8; buffer.len()];
-        self.0.fetch_from_isr(&mut buf_bytes)?;
-        *buffer = T::from_bytes(&buf_bytes)?;
-        Ok(())
-    }
-
-    /// Sends a typed message to the queue (without serde feature).
-    ///
-    /// Serializes the message to bytes using the custom serialization traits.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` — Reference to the message to send.
-    /// * `time` — Timeout in system ticks.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully serialized and sent.
-    /// * `Err(Error::Timeout)` — Queue full.
-    /// * `Err(Error::InvalidMessageSize)` — Message size mismatch.
-    /// * `Err(Error)` — Serialization error.
-    #[inline]
+impl<T> QueueStreamedFn<T> for QueueStreamed<T> where T: StructSerde {
     fn post(&self, item: &T, time: TickType) -> Result<()> {
         let bytes = item.to_bytes();
-
-        // Verify BytesHasLen is consistent with the actual serialized length.
-        if bytes.len() != item.len() {
-            return Err(Error::InvalidMessageSize);
-        }
-
+        if bytes.len() != item.len() { return Err(Error::InvalidMessageSize); }
         self.0.post(bytes, time)
     }
 
-    /// Sends a typed message from ISR context (without serde feature).
-    ///
-    /// ISR-safe version that does not block. Serializes the message to bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` — Reference to the message to send.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully serialized and sent.
-    /// * `Err(Error::Timeout)` — Queue is full.
-    /// * `Err(Error::InvalidMessageSize)` — Message size mismatch.
-    /// * `Err(Error)` — Serialization error.
-    #[inline]
     fn post_from_isr(&self, item: &T) -> Result<()> {
         let bytes = item.to_bytes();
-
-        if bytes.len() != item.len() {
-            return Err(Error::InvalidMessageSize);
-        }
-
+        if bytes.len() != item.len() { return Err(Error::InvalidMessageSize); }
         self.0.post_from_isr(bytes)
     }
 
-    /// Deletes the typed queue.
-    ///
-    /// Delegates to the underlying byte queue's delete method.
-    #[inline]
-    fn delete(&mut self) {
-        self.0.delete()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// QueueStreamedFn impl — with serde feature
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "serde")]
-impl<T> QueueStreamedFn<T> for QueueStreamed<T>
-where
-    T: StructSerde,
-{
-    /// Receives a typed message from the queue (with serde feature).
-    ///
-    /// Deserializes the message from bytes using the serde framework.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` — Mutable reference to receive the deserialized message.
-    /// * `time` — Timeout in system ticks.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully received and deserialized.
-    /// * `Err(Error::Timeout)` — Queue empty or timeout.
-    /// * `Err(Error::InvalidMessageSize)` — Buffer length mismatch.
-    /// * `Err(Error::Unhandled)` — Deserialization error.
     fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
         let mut buf_bytes = vec![0u8; buffer.len()];
         self.0.fetch(&mut buf_bytes, time)?;
-        *buffer = serde_from_bytes(&buf_bytes)
-            .map_err(|_| Error::Unhandled("Deserialization error"))?;
+        *buffer = T::from_bytes(&buf_bytes)?;
         Ok(())
     }
 
-    /// Receives a typed message from ISR context (with serde feature).
-    ///
-    /// ISR-safe version that does not block. Deserializes using serde.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` — Mutable reference to receive the deserialized message.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully received and deserialized.
-    /// * `Err(Error::Timeout)` — Queue is empty.
-    /// * `Err(Error::InvalidMessageSize)` — Buffer length mismatch.
-    /// * `Err(Error::Unhandled)` — Deserialization error.
     fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
         let mut buf_bytes = vec![0u8; buffer.len()];
         self.0.fetch_from_isr(&mut buf_bytes)?;
-        *buffer = serde_from_bytes(&buf_bytes)
-            .map_err(|_| Error::Unhandled("Deserialization error"))?;
+        *buffer = T::from_bytes(&buf_bytes)?;
         Ok(())
     }
 
-    /// Sends a typed message to the queue (with serde feature).
-    ///
-    /// Serializes the message to bytes using the serde framework.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` — Reference to the message to send.
-    /// * `time` — Timeout in system ticks.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully serialized and sent.
-    /// * `Err(Error::Timeout)` — Queue full.
-    /// * `Err(Error::InvalidMessageSize)` — Message size mismatch.
-    /// * `Err(Error::Unhandled)` — Serialization error.
+    fn delete(&mut self) { self.0.delete() }
+}
+
+// Serde QueueStreamedFn
+#[cfg(feature = "serde")]
+impl<T> QueueStreamedFn<T> for QueueStreamed<T> where T: StructSerde {
     fn post(&self, item: &T, time: TickType) -> Result<()> {
         let mut buf_bytes = vec![0u8; item.len()];
-        let written = serde_to_bytes(item, &mut buf_bytes)
-            .map_err(|_| Error::Unhandled("Serialization error"))?;
-        if written != buf_bytes.len() {
-            return Err(Error::InvalidMessageSize);
-        }
+        let written = serde_to_bytes(item, &mut buf_bytes).map_err(|_| Error::Unhandled("Serialization error"))?;
+        if written != buf_bytes.len() { return Err(Error::InvalidMessageSize); }
         self.0.post(&buf_bytes, time)
     }
 
-    /// Sends a typed message from ISR context (with serde feature).
-    ///
-    /// ISR-safe version that does not block. Serializes using serde.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` — Reference to the message to send.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` — Message successfully serialized and sent.
-    /// * `Err(Error::Timeout)` — Queue is full.
-    /// * `Err(Error::InvalidMessageSize)` — Message size mismatch.
-    /// * `Err(Error::Unhandled)` — Serialization error.
     fn post_from_isr(&self, item: &T) -> Result<()> {
         let mut buf_bytes = vec![0u8; item.len()];
-        let written = serde_to_bytes(item, &mut buf_bytes)
-            .map_err(|_| Error::Unhandled("Serialization error"))?;
-        if written != buf_bytes.len() {
-            return Err(Error::InvalidMessageSize);
-        }
+        let written = serde_to_bytes(item, &mut buf_bytes).map_err(|_| Error::Unhandled("Serialization error"))?;
+        if written != buf_bytes.len() { return Err(Error::InvalidMessageSize); }
         self.0.post_from_isr(&buf_bytes)
     }
 
-    /// Deletes the typed queue (serde version).
-    ///
-    /// Delegates to the underlying byte queue's delete method.
-    #[inline]
-    fn delete(&mut self) {
-        self.0.delete()
+    fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
+        let mut buf_bytes = vec![0u8; buffer.len()];
+        self.0.fetch(&mut buf_bytes, time)?;
+        *buffer = serde_from_bytes(&buf_bytes).map_err(|_| Error::Unhandled("Deserialization error"))?;
+        Ok(())
     }
+
+    fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
+        let mut buf_bytes = vec![0u8; buffer.len()];
+        self.0.fetch_from_isr(&mut buf_bytes)?;
+        *buffer = serde_from_bytes(&buf_bytes).map_err(|_| Error::Unhandled("Deserialization error"))?;
+        Ok(())
+    }
+
+    fn delete(&mut self) { self.0.delete() }
 }
 
-// ---------------------------------------------------------------------------
-// Trait impls for QueueStreamed
-// ---------------------------------------------------------------------------
-
-impl<T> Deref for QueueStreamed<T>
-where
-    T: StructSerde,
-{
+// Trait impls
+impl<T> Deref for QueueStreamed<T> where T: StructSerde {
     type Target = Queue;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
 
-impl<T> Debug for QueueStreamed<T>
-where
-    T: StructSerde,
-{
+impl<T> Debug for QueueStreamed<T> where T: StructSerde {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("QueueStreamed")
-            .field("inner", &self.0)
-            .finish()
+        f.debug_struct("QueueStreamed").field("inner", &self.0).finish()
     }
 }
 
-impl<T> Display for QueueStreamed<T>
-where
-    T: StructSerde,
-{
+impl<T> Display for QueueStreamed<T> where T: StructSerde {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "QueueStreamed {{ inner: {} }}", self.0)
     }
