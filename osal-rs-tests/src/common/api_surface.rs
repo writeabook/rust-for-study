@@ -30,11 +30,10 @@ use osal_rs::log_info;
 
 const TAG: &str = "ApiSurfaceTests";
 
-#[cfg(not(feature = "serde"))]
-use osal_rs::os::{Deserialize, Serialize};
+use osal_rs::utils::{Error, Result};
 
 #[cfg(not(feature = "serde"))]
-use osal_rs::utils::{Error, Result};
+use osal_rs::os::{Deserialize, Serialize};
 
 #[cfg(not(feature = "serde"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

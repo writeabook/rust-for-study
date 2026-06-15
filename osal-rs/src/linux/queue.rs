@@ -43,12 +43,12 @@ use std::time::Instant;
 use crate::os::Deserialize;
 
 #[cfg(not(feature = "serde"))]
-use crate::traits::{BytesHasLen, Serialize};
+use crate::traits::Serialize;
 
 #[cfg(feature = "serde")]
 use osal_rs_serde::{Deserialize, Serialize, from_bytes as serde_from_bytes, to_bytes as serde_to_bytes};
 
-use crate::traits::{QueueFn, QueueStreamedFn, ToTick};
+use crate::traits::{BytesHasLen, QueueFn, QueueStreamedFn, ToTick};
 use super::types::{QueueHandle, TickType, UBaseType};
 use crate::utils::{Error, Result, MAX_DELAY};
 
