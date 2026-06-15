@@ -405,6 +405,8 @@ pub mod os {
     pub use crate::linux::event_group::*;
     #[allow(unused_imports)]
     pub use crate::linux::queue::*;
+    #[allow(unused_imports)]
+    pub use crate::linux::timer::*;
 }
 
 /// Default panic handler for `no_std` environments.
