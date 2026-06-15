@@ -48,7 +48,7 @@ use osal_rs_serde::{Deserialize, Serialize, from_bytes as serde_from_bytes, to_b
 
 use crate::traits::{BytesHasLen, QueueFn, QueueStreamedFn, ToTick};
 use super::types::{QueueHandle, TickType, UBaseType};
-use crate::utils::{Error, Result, MAX_DELAY};
+use crate::utils::{Error, Result};
 
 // ---------------------------------------------------------------------------
 // StructSerde — helper trait bound
@@ -96,7 +96,9 @@ fn recover_lock<T>(result: std::sync::LockResult<T>) -> T {
 static NEXT_QUEUE_HANDLE: AtomicUsize = AtomicUsize::new(1);
 
 fn next_queue_handle() -> QueueHandle {
-    NEXT_QUEUE_HANDLE.fetch_add(1, Ordering::Relaxed) as QueueHandle
+    NEXT_QUEUE_HANDLE
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| current.checked_add(1))
+        .expect("Linux queue handle space exhausted") as QueueHandle
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +458,11 @@ impl<T> QueueStreamedFn<T> for QueueStreamed<T> where T: StructSerde {
 }
 
 // Trait impls
+impl<T> QueueStreamed<T> where T: StructSerde {
+    /// Close the underlying queue (see [`Queue::close`]).
+    pub fn close(&self) { self.0.close(); }
+}
+
 impl<T> Deref for QueueStreamed<T> where T: StructSerde {
     type Target = Queue;
     fn deref(&self) -> &Self::Target { &self.0 }
