@@ -49,42 +49,55 @@ const TAG: &str = "LinuxQueueTests";
 // Test type for non-serde QueueStreamed round-trip tests
 // ===========================================================================
 
+/// A safe, fixed-size test message backed by a `[u8; 6]` array.
+///
+/// Uses explicit little-endian encoding in `new()` and `deserialize()` so
+/// that the test is portable and does not depend on Rust struct layout.
 #[cfg(not(feature = "serde"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TestMessage {
-    id: u32,
-    value: i16,
+    bytes: [u8; 6],
+}
+
+#[cfg(not(feature = "serde"))]
+impl TestMessage {
+    fn new(id: u32, value: i16) -> Self {
+        let mut bytes = [0u8; 6];
+        bytes[..4].copy_from_slice(&id.to_le_bytes());
+        bytes[4..].copy_from_slice(&value.to_le_bytes());
+        Self { bytes }
+    }
+
+    fn id(&self) -> u32 {
+        u32::from_le_bytes([self.bytes[0], self.bytes[1], self.bytes[2], self.bytes[3]])
+    }
+
+    fn value(&self) -> i16 {
+        i16::from_le_bytes([self.bytes[4], self.bytes[5]])
+    }
 }
 
 #[cfg(not(feature = "serde"))]
 impl BytesHasLen for TestMessage {
-    fn len(&self) -> usize { 6 }
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
 }
 
 #[cfg(not(feature = "serde"))]
 impl OsalSerialize for TestMessage {
     fn to_bytes(&self) -> &[u8] {
-        // Safety: TestMessage is a plain struct with a known layout.
-        // This is only used in host (Linux) tests.
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                6,
-            )
-        }
+        &self.bytes
     }
 }
 
 #[cfg(not(feature = "serde"))]
 impl OsalDeserialize for TestMessage {
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < 6 {
-            return Err(Error::InvalidMessageSize);
-        }
-        Ok(TestMessage {
-            id: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-            value: i16::from_le_bytes([bytes[4], bytes[5]]),
-        })
+        let arr: [u8; 6] = bytes
+            .try_into()
+            .map_err(|_| Error::InvalidMessageSize)?;
+        Ok(Self { bytes: arr })
     }
 }
 
@@ -102,6 +115,36 @@ struct SerdeTestMessage {
 #[cfg(feature = "serde")]
 impl BytesHasLen for SerdeTestMessage {
     fn len(&self) -> usize { 6 }
+}
+
+// ===========================================================================
+// Broken test type — len() disagrees with to_bytes()
+// ===========================================================================
+
+#[cfg(not(feature = "serde"))]
+#[derive(Debug, Clone, Copy)]
+struct BrokenMessage([u8; 8]);
+
+#[cfg(not(feature = "serde"))]
+impl BytesHasLen for BrokenMessage {
+    fn len(&self) -> usize { 6 } // intentionally wrong
+}
+
+#[cfg(not(feature = "serde"))]
+impl OsalSerialize for BrokenMessage {
+    fn to_bytes(&self) -> &[u8] {
+        &self.0 // 8 bytes
+    }
+}
+
+#[cfg(not(feature = "serde"))]
+impl OsalDeserialize for BrokenMessage {
+    fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let arr: [u8; 8] = bytes
+            .try_into()
+            .map_err(|_| Error::InvalidMessageSize)?;
+        Ok(Self(arr))
+    }
 }
 
 // ===========================================================================
@@ -277,13 +320,15 @@ pub fn test_queue_streamed_round_trip() -> Result<()> {
     log_info!(TAG, "Starting test_queue_streamed_round_trip");
     let queue: QueueStreamed<TestMessage> = QueueStreamed::new(4, 6)?;
 
-    let msg = TestMessage { id: 7, value: -12 };
+    let msg = TestMessage::new(7, -12);
     queue.post(&msg, 0)?;
 
-    let mut received = TestMessage { id: 0, value: 0 };
+    let mut received = TestMessage::new(0, 0);
     queue.fetch(&mut received, 0)?;
 
     assert_eq!(received, msg);
+    assert_eq!(received.id(), 7);
+    assert_eq!(received.value(), -12);
     log_info!(TAG, "test_queue_streamed_round_trip PASSED");
     Ok(())
 }
@@ -294,7 +339,7 @@ pub fn test_queue_streamed_fifo() -> Result<()> {
     let queue: QueueStreamed<TestMessage> = QueueStreamed::new(4, 6)?;
 
     let messages: Vec<_> = (0..4)
-        .map(|i| TestMessage { id: i, value: -(i as i16) })
+        .map(|i| TestMessage::new(i, -(i as i16)))
         .collect();
 
     for msg in &messages {
@@ -302,7 +347,7 @@ pub fn test_queue_streamed_fifo() -> Result<()> {
     }
 
     for expected in &messages {
-        let mut received = TestMessage { id: 0, value: 0 };
+        let mut received = TestMessage::new(0, 0);
         queue.fetch(&mut received, 0)?;
         assert_eq!(received, *expected, "FIFO order mismatch");
     }
@@ -317,7 +362,7 @@ pub fn test_queue_streamed_wrong_message_size() -> Result<()> {
     // TestMessage serialization is 6 bytes, but queue expects 8
     let queue: QueueStreamed<TestMessage> = QueueStreamed::new(2, 8)?;
 
-    let msg = TestMessage { id: 1, value: 2 };
+    let msg = TestMessage::new(1, 2);
     let result = queue.post(&msg, 0);
     assert_eq!(result, Err(Error::InvalidMessageSize));
 
@@ -330,14 +375,38 @@ pub fn test_queue_streamed_isr_round_trip() -> Result<()> {
     log_info!(TAG, "Starting test_queue_streamed_isr_round_trip");
     let queue: QueueStreamed<TestMessage> = QueueStreamed::new(2, 6)?;
 
-    let msg = TestMessage { id: 42, value: 99 };
+    let msg = TestMessage::new(42, 99);
     queue.post_from_isr(&msg)?;
 
-    let mut received = TestMessage { id: 0, value: 0 };
+    let mut received = TestMessage::new(0, 0);
     queue.fetch_from_isr(&mut received)?;
 
     assert_eq!(received, msg);
     log_info!(TAG, "test_queue_streamed_isr_round_trip PASSED");
+    Ok(())
+}
+
+// ===========================================================================
+// len() vs to_bytes() consistency test
+// ===========================================================================
+
+#[cfg(not(feature = "serde"))]
+pub fn test_queue_streamed_broken_len_consistency() -> Result<()> {
+    log_info!(TAG, "Starting test_queue_streamed_broken_len_consistency");
+    // BrokenMessage: len() = 6, to_bytes() = 8
+    let queue: QueueStreamed<BrokenMessage> = QueueStreamed::new(2, 8)?;
+
+    let msg = BrokenMessage([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    // post() must detect the inconsistency and reject
+    let result = queue.post(&msg, 0);
+    assert_eq!(result, Err(Error::InvalidMessageSize));
+
+    // post_from_isr() must also detect it
+    let result_isr = queue.post_from_isr(&msg);
+    assert_eq!(result_isr, Err(Error::InvalidMessageSize));
+
+    log_info!(TAG, "test_queue_streamed_broken_len_consistency PASSED");
     Ok(())
 }
 
@@ -384,6 +453,22 @@ pub fn test_queue_streamed_serde_fifo() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "serde")]
+pub fn test_queue_streamed_serde_isr_round_trip() -> Result<()> {
+    log_info!(TAG, "Starting test_queue_streamed_serde_isr_round_trip");
+    let queue: QueueStreamed<SerdeTestMessage> = QueueStreamed::new(2, 6)?;
+
+    let msg = SerdeTestMessage { id: 42, value: -9 };
+    queue.post_from_isr(&msg)?;
+
+    let mut received = SerdeTestMessage { id: 0, value: 0 };
+    queue.fetch_from_isr(&mut received)?;
+
+    assert_eq!(received, msg);
+    log_info!(TAG, "test_queue_streamed_serde_isr_round_trip PASSED");
+    Ok(())
+}
+
 // ===========================================================================
 // Run all tests
 // ===========================================================================
@@ -414,6 +499,7 @@ pub fn run_all_tests() -> Result<()> {
         test_queue_streamed_fifo()?;
         test_queue_streamed_wrong_message_size()?;
         test_queue_streamed_isr_round_trip()?;
+        test_queue_streamed_broken_len_consistency()?;
     }
 
     // Serde QueueStreamed tests
@@ -421,6 +507,7 @@ pub fn run_all_tests() -> Result<()> {
     {
         test_queue_streamed_serde_round_trip()?;
         test_queue_streamed_serde_fifo()?;
+        test_queue_streamed_serde_isr_round_trip()?;
     }
 
     log_info!(TAG, "========== All Linux-Specific Queue Tests PASSED ==========");

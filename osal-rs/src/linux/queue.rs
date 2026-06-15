@@ -696,7 +696,14 @@ where
     /// * `Err(Error)` — Serialization error.
     #[inline]
     fn post(&self, item: &T, time: TickType) -> Result<()> {
-        self.0.post(&item.to_bytes(), time)
+        let bytes = item.to_bytes();
+
+        // Verify BytesHasLen is consistent with the actual serialized length.
+        if bytes.len() != item.len() {
+            return Err(Error::InvalidMessageSize);
+        }
+
+        self.0.post(bytes, time)
     }
 
     /// Sends a typed message from ISR context (without serde feature).
@@ -715,7 +722,13 @@ where
     /// * `Err(Error)` — Serialization error.
     #[inline]
     fn post_from_isr(&self, item: &T) -> Result<()> {
-        self.0.post_from_isr(&item.to_bytes())
+        let bytes = item.to_bytes();
+
+        if bytes.len() != item.len() {
+            return Err(Error::InvalidMessageSize);
+        }
+
+        self.0.post_from_isr(bytes)
     }
 
     /// Deletes the typed queue.
