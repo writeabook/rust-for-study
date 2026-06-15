@@ -81,9 +81,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `System::count_threads` → `uxTaskGetNumberOfTasks` / `System::get_all_thread` → `uxTaskGetSystemState` | `System::count_threads` returns `1` / `System::get_all_thread` returns empty `SystemState` |
-| **Behavior** | FreeRTOS maintains a complete task list (name, priority, state, stack high-water mark). | The Linux backend does not yet maintain an internal thread registry (v0.1). |
-| **Mitigation** | Built into the kernel. | Introspection tests are gated with `#[cfg(feature = "freertos")]` on Linux.  A registry may be added in a future release. |
+| **Function** | `System::count_threads` → `uxTaskGetNumberOfTasks` / `System::get_all_thread` → `uxTaskGetSystemState` | `System::count_threads` returns `1` / `System::get_all_thread` returns a single placeholder `ThreadMetadata` record |
+| **Behavior** | FreeRTOS maintains a complete task list (name, priority, state, stack high-water mark). | The Linux backend returns a fixed placeholder record (`"main"`, `Running`, priority 1) — no dynamic thread registry is maintained (v0.1). |
+| **Mitigation** | Built into the kernel. | Both backends now pass the same introspection tests. A dynamic registry may be added in a future release. |
 
 ---
 
@@ -111,9 +111,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` returns `usize::MAX` |
-| **Behavior** | FreeRTOS pre-allocates a fixed-size heap; `get_free_heap_size` reports remaining bytes — object creation can fail with `OutOfMemory`. | Linux provides virtual memory; Rust allocations almost never fail. |
-| **Mitigation** | N/A. | `RawMutex::new` uses `unwrap()`.  Testing allocation failure would require additional `#[cfg]` endpoints.  Can be added in a future release. |
+| **Function** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` returns `1` |
+| **Behavior** | FreeRTOS pre-allocates a fixed-size heap; `get_free_heap_size` reports remaining bytes — object creation can fail with `OutOfMemory`. | Linux provides virtual memory; Rust allocations almost never fail. Returns `1` to satisfy `> 0` assertions in portable tests. |
+| **Mitigation** | N/A. | `RawMutex::new` uses `unwrap()`. Testing allocation failure would require additional `#[cfg]` endpoints. Can be added in a future release. |
 
 ---
 

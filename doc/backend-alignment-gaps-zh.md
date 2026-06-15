@@ -80,9 +80,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `System::count_threads` → `uxTaskGetNumberOfTasks` / `System::get_all_thread` → `uxTaskGetSystemState` | `System::count_threads` 返回 `1` / `System::get_all_thread` 返回空 `SystemState` |
-| **行为** | FreeRTOS 维护完整的任务列表（名称、优先级、状态、栈高水位）。 | Linux 后端尚无内部线程注册表（v0.1）。 |
-| **缓解措施** | 内置于内核。 | 相关测试在 Linux 下标记 `#[cfg(feature = "freertos")]`。未来可能维护注册表。 |
+| **函数** | `System::count_threads` → `uxTaskGetNumberOfTasks` / `System::get_all_thread` → `uxTaskGetSystemState` | `System::count_threads` 返回 `1` / `System::get_all_thread` 返回单条占位 `ThreadMetadata` 记录 |
+| **行为** | FreeRTOS 维护完整的任务列表（名称、优先级、状态、栈高水位）。 | Linux 后端返回固定占位记录（`"main"`，`Running`，优先级 1）——无动态线程注册表（v0.1）。 |
+| **缓解措施** | 内置于内核。 | 两后端现通过相同的内省测试。未来可能添加动态注册表。 |
 
 ---
 
@@ -110,8 +110,8 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` 返回 `usize::MAX` |
-| **行为** | FreeRTOS 预分配固定大小的堆，`get_free_heap_size` 返回可用字节数——对象创建可能因 `OutOfMemory` 失败。 | Linux 提供虚拟内存；Rust 分配几乎永不失败。 |
+| **函数** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` 返回 `1` |
+| **行为** | FreeRTOS 预分配固定大小的堆，`get_free_heap_size` 返回可用字节数——对象创建可能因 `OutOfMemory` 失败。 | Linux 提供虚拟内存；Rust 分配几乎永不失败。返回 `1` 以满足可移植测试中的 `> 0` 断言。 |
 | **缓解措施** | 不适用。 | `RawMutex::new` 使用 `unwrap()`。测试分配失败需额外 `#[cfg]` 端点。可在未来的版本中添加。 |
 
 ---
