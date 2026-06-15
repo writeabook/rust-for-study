@@ -204,3 +204,43 @@
 | **Function** | `QueueStreamed<T>::fetch` → deserialize from `Vec<u8>` using `T::from_bytes` | `QueueStreamed<T>::fetch` → deserialize from `Vec<u8>` using `T::from_bytes` (or serde) |
 | **Behavior** | Both backends allocate a temporary `Vec<u8>` for the raw message, then deserialize into the caller's `&mut T` buffer.  The OSAL contract requires message-size consistency — the `Vec` capacity equals `T::len()`. | Identical logic.  The Linux backend explicitly copies from `VecDeque<Vec<u8>>` (which already contains a `Vec<u8>`) into the temporary `Vec`, then deserializes — one extra copy compared to the FreeRTOS kernel's direct memcpy from its internal buffer. |
 | **Mitigation** | N/A. | The extra copy is negligible for development/test workloads and does not affect the public API contract.  Both backends pass the same test suite. |
+
+---
+
+## 21. Thread — Suspend / Resume
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Thread::suspend` → `vTaskSuspend` / `Thread::resume` → `vTaskResume` | `Thread::suspend` / `Thread::resume` — empty bodies |
+| **Behavior** | FreeRTOS atomically suspends/resumes the target task. The suspended task stops executing immediately. | Linux user space cannot atomically suspend another thread. No-op. |
+| **Mitigation** | N/A. | Documented no-op. Application code should not rely on `suspend`/`resume` for synchronization on Linux.
+
+---
+
+## 22. Thread — Stack High Water Mark
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Thread::get_metadata` → `uxTaskGetStackHighWaterMark` | `Thread::get_metadata` → fills `stack_depth` as-is |
+| **Behavior** | FreeRTOS tracks the minimum remaining stack space ever recorded. | Linux fills `stack_high_water_mark` with the initial `stack_depth` — no runtime tracking. |
+| **Mitigation** | N/A. | Stack overflow detection requires separate tooling (e.g., valgrind, ASan) on Linux.
+
+---
+
+## 23. Thread — Priority-Ordered Notification Wake
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Thread::notify` / `Thread::wait_notification` → `xTaskNotify` / `xTaskNotifyWait` | `Thread::notify` / `Thread::wait_notification` → `StdMutex::lock` + `Condvar` |
+| **Behavior** | FreeRTOS task notifications use priority-ordered wake-up. If multiple tasks are waiting on notifications, the highest-priority task is unblocked first. | Linux uses `Condvar::notify_all` — all waiters wake and compete for the lock. |
+| **Mitigation** | N/A. | Wake order does not impact correctness for development/test workloads on Linux — thread priorities are informational only.
+
+---
+
+## 24. Thread — ISR Context Switch
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Thread::notify_from_isr` → `xTaskNotifyFromISR` + `System::yield_from_isr` | `Thread::notify_from_isr` → `StdMutex::try_lock` + `Condvar::notify_all` |
+| **Behavior** | On success, signals the scheduler to perform a context switch so a higher-priority task runs immediately after the ISR. | Pure non-blocking notification with no context switch. |
+| **Mitigation** | Built into the kernel. | Linux has no ISR context; `notify_from_isr` is semantically correct as a non-blocking operation.

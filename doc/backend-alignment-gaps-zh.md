@@ -203,3 +203,43 @@
 | **函数** | `QueueStreamed<T>::fetch` → 使用 `T::from_bytes` 从 `Vec<u8>` 反序列化 | `QueueStreamed<T>::fetch` → 使用 `T::from_bytes`（或 serde）从 `Vec<u8>` 反序列化 |
 | **行为** | 两后端均为原始消息分配临时 `Vec<u8>`，然后反序列化到调用者的 `&mut T` 缓冲区。OSAL 契约要求消息大小一致性——`Vec` 容量等于 `T::len()`。 | 逻辑相同。Linux 后端显式地从 `VecDeque<Vec<u8>>`（其中已包含 `Vec<u8>`）拷贝到临时 `Vec`，然后反序列化——相比 FreeRTOS 内核从其内部缓冲区直接 memcpy，多了一次额外拷贝。 |
 | **缓解措施** | 不适用。 | 额外拷贝在开发/测试中可忽略，不影响公共 API 契约。两后端通过相同的测试套件。 |
+
+---
+
+## 21. Thread — 挂起/恢复
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Thread::suspend` → `vTaskSuspend` / `Thread::resume` → `vTaskResume` | `Thread::suspend` / `Thread::resume` — 空函数体 |
+| **行为** | FreeRTOS 原子地挂起/恢复目标任务。挂起的任务立即停止执行。 | Linux 用户空间无法原子地挂起另一个线程。无操作。 |
+| **缓解措施** | 不适用。 | 已文档化为无操作。应用代码不应在 Linux 上依赖 `suspend`/`resume` 进行同步。
+
+---
+
+## 22. Thread — 栈高水位标记
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Thread::get_metadata` → `uxTaskGetStackHighWaterMark` | `Thread::get_metadata` → 直接填入 `stack_depth` |
+| **行为** | FreeRTOS 记录历史最小剩余栈空间。 | Linux 用初始 `stack_depth` 填充 `stack_high_water_mark`——无运行时跟踪。 |
+| **缓解措施** | 不适用。 | Linux 上栈溢出检测需要单独的工具（如 valgrind、ASan）。
+
+---
+
+## 23. Thread — 优先级有序的通知唤醒
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Thread::notify` / `Thread::wait_notification` → `xTaskNotify` / `xTaskNotifyWait` | `Thread::notify` / `Thread::wait_notification` → `StdMutex::lock` + `Condvar` |
+| **行为** | FreeRTOS 任务通知使用按优先级排序的唤醒。如果多个任务正在等待通知，最高优先级任务首先解除阻塞。 | Linux 使用 `Condvar::notify_all`——所有等待者唤醒并竞争锁。 |
+| **缓解措施** | 不适用。 | Linux 上线程优先级仅作信息用途，唤醒顺序不影响开发/测试的正确性。
+
+---
+
+## 24. Thread — ISR 上下文切换
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Thread::notify_from_isr` → `xTaskNotifyFromISR` + `System::yield_from_isr` | `Thread::notify_from_isr` → `StdMutex::try_lock` + `Condvar::notify_all` |
+| **行为** | 成功后通知调度器进行上下文切换，让更高优先级任务在 ISR 之后立即运行。 | 纯非阻塞通知，无上下文切换。 |
+| **缓解措施** | 内置于内核。 | Linux 无 ISR 上下文；`notify_from_isr` 作为非阻塞操作语义正确。
