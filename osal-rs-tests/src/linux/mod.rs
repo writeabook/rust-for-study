@@ -33,6 +33,11 @@ fn test_run_all_tests_thread() {
     crate::common::thread_tests::run_all_tests().unwrap();
 }
 
+#[test]
+fn test_run_all_tests_timer() {
+    crate::common::timer_tests::run_all_tests().unwrap();
+}
+
 // #[test]
 // fn test_system_get_tick_count() {
 //     crate::common::system_tests::test_system_get_tick_count().unwrap();

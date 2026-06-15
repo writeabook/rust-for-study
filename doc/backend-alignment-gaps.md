@@ -244,3 +244,43 @@
 | **Function** | `Thread::notify_from_isr` → `xTaskNotifyFromISR` + `System::yield_from_isr` | `Thread::notify_from_isr` → `StdMutex::try_lock` + `Condvar::notify_all` |
 | **Behavior** | On success, signals the scheduler to perform a context switch so a higher-priority task runs immediately after the ISR. | Pure non-blocking notification with no context switch. |
 | **Mitigation** | Built into the kernel. | Linux has no ISR context; `notify_from_isr` is semantically correct as a non-blocking operation.
+
+---
+
+## 25. Timer — Scheduler Architecture
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Timer::new` → `xTimerCreate` registers with the timer daemon task | `Timer::new` creates a dedicated worker `std::thread` per timer |
+| **Behavior** | FreeRTOS uses a single timer service task that processes all timers from a command queue. Callbacks run sequentially in the daemon context. | Each timer spawns its own OS thread on first `start()`. Threads sleep independently. |
+| **Mitigation** | N/A. | The per-timer thread model is functionally equivalent — callbacks still run sequentially per timer. For deeply embedded use cases, deploy to FreeRTOS to avoid per-timer thread overhead.
+
+---
+
+## 26. Timer — Scheduling Precision
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | Timer expiry triggered by the kernel tick interrupt | Timer expiry via `std::thread::sleep` with 5 ms polling |
+| **Behavior** | FreeRTOS timers expire at the next tick boundary after the period elapses (typically ±1 tick jitter). | Linux timers poll every 5 ms and fire within ±5 ms of the actual period. |
+| **Mitigation** | N/A. | Acceptable for development/test workloads. Deploy to FreeRTOS for hard real-time timer guarantees.
+
+---
+
+## 27. Timer — Command Queue vs Synchronous Operations
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `start` / `stop` / `reset` / `change_period` → send command to timer daemon queue | `start` / `stop` / `reset` / `change_period` → directly mutate shared state + notify worker via `Condvar` |
+| **Behavior** | FreeRTOS uses an internal command queue for timer operations. If the queue is full, the caller blocks up to `ticks_to_wait`. | Linux ignores `ticks_to_wait` — all operations are synchronous and cannot block (no bounded queue). |
+| **Mitigation** | `ticks_to_wait` is implemented as `_ticks_to_wait: TickType` (unused). | Application code should not rely on `ticks_to_wait` for timer API calls on Linux.
+
+---
+
+## 28. Timer — Resource Destruction
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Timer::delete` / `Drop` → `xTimerDelete` | `Timer::delete` / `Drop` → sets `deleted` + `cancelled` flags, notifies worker via `Condvar` |
+| **Behavior** | FreeRTOS asynchronously deletes the timer object and frees kernel resources. | Linux sets flags so the worker thread exits on its next poll cycle. No explicit thread join in Drop (avoids blocking). |
+| **Mitigation** | N/A. | Worker threads may linger briefly after `delete()` returns. Application code should allow a short grace period before process exit.

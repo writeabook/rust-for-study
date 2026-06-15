@@ -243,3 +243,43 @@
 | **函数** | `Thread::notify_from_isr` → `xTaskNotifyFromISR` + `System::yield_from_isr` | `Thread::notify_from_isr` → `StdMutex::try_lock` + `Condvar::notify_all` |
 | **行为** | 成功后通知调度器进行上下文切换，让更高优先级任务在 ISR 之后立即运行。 | 纯非阻塞通知，无上下文切换。 |
 | **缓解措施** | 内置于内核。 | Linux 无 ISR 上下文；`notify_from_isr` 作为非阻塞操作语义正确。
+
+---
+
+## 25. Timer — 调度器架构
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Timer::new` → `xTimerCreate` 在定时器守护任务中注册 | `Timer::new` 为每个定时器创建专用的 `std::thread` 工作线程 |
+| **行为** | FreeRTOS 使用一个定时器服务任务处理所有定时器。回调在守护任务上下文中顺序执行。 | 每个定时器在首次 `start()` 时生成自己的操作系统线程。线程独立睡眠。 |
+| **缓解措施** | 不适用。 | 每定时器一线程模型功能上等效——回调仍按定时器顺序执行。对于深度嵌入场景，部署至 FreeRTOS 以避免每定时器的线程开销。
+
+---
+
+## 26. Timer — 调度精度
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | 定时器到期由内核 tick 中断触发 | 定时器到期通过 `std::thread::sleep` + 5 ms 轮询实现 |
+| **行为** | FreeRTOS 定时器在周期结束后下一个 tick 边界到期（通常 ±1 tick 抖动）。 | Linux 定时器每 5 ms 轮询一次，在距实际周期 ±5 ms 内触发。 |
+| **缓解措施** | 不适用。 | 对于开发/测试工作负载可接受。需要硬实时定时器保证时部署至 FreeRTOS。
+
+---
+
+## 27. Timer — 命令队列 vs 同步操作
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `start` / `stop` / `reset` / `change_period` → 向定时器守护任务队列发送命令 | `start` / `stop` / `reset` / `change_period` → 直接修改共享状态 + 通过 `Condvar` 通知工作线程 |
+| **行为** | FreeRTOS 为定时器操作使用内部命令队列。队列满时调用者阻塞至多 `ticks_to_wait`。 | Linux 忽略 `ticks_to_wait`——所有操作均为同步，不可阻塞（无有界队列）。 |
+| **缓解措施** | `ticks_to_wait` 实现为 `_ticks_to_wait: TickType`（未使用）。 | 应用代码不应在 Linux 上依赖 `ticks_to_wait` 参数。
+
+---
+
+## 28. Timer — 资源销毁
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Timer::delete` / `Drop` → `xTimerDelete` | `Timer::delete` / `Drop` → 设置 `deleted` + `cancelled` 标志，通过 `Condvar` 通知工作线程 |
+| **行为** | FreeRTOS 异步删除定时器对象并释放内核资源。 | Linux 设置标志，工作线程在下个轮询周期退出。Drop 中不显式 join 线程（避免阻塞）。 |
+| **缓解措施** | 不适用。 | 工作线程可能在 `delete()` 返回后短暂逗留。应用代码应在进程退出前预留短暂宽限期。

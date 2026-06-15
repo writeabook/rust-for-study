@@ -11,5 +11,5 @@ pub mod thread_tests;
 // as each module is implemented.
 #[cfg(feature = "freertos")]
 pub mod api_surface;
-#[cfg(feature = "freertos")]
+#[cfg(any(feature = "freertos", feature = "linux"))]
 pub mod timer_tests;
