@@ -79,7 +79,11 @@ fn recover_lock<T>(result: std::sync::LockResult<T>) -> T {
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(1);
 
 fn next_handle() -> MutexHandle {
-    NEXT_HANDLE.fetch_add(1, Ordering::Relaxed) as MutexHandle
+    NEXT_HANDLE
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .expect("Linux mutex handle space exhausted") as MutexHandle
 }
 
 // ===========================================================================
@@ -102,12 +106,49 @@ unsafe impl Sync for RawMutex {}
 
 impl Debug for RawMutex {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("RawMutex").finish_non_exhaustive()
+        match self.inner.try_lock() {
+            Ok(state) => f
+                .debug_struct("RawMutex")
+                .field("owner", &state.owner)
+                .field("recursion", &state.recursion)
+                .field("handle", &self.handle)
+                .finish(),
+            Err(TryLockError::Poisoned(err)) => {
+                let state = err.into_inner();
+                f.debug_struct("RawMutex")
+                    .field("owner", &state.owner)
+                    .field("recursion", &state.recursion)
+                    .field("handle", &self.handle)
+                    .field("poisoned", &true)
+                    .finish()
+            }
+            Err(TryLockError::WouldBlock) => f
+                .debug_struct("RawMutex")
+                .field("handle", &self.handle)
+                .finish_non_exhaustive(),
+        }
     }
 }
 impl Display for RawMutex {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "RawMutex")
+        match self.inner.try_lock() {
+            Ok(state) => write!(
+                f,
+                "RawMutex {{ owner: {:?}, recursion: {}, handle: {:?} }}",
+                state.owner, state.recursion, self.handle,
+            ),
+            Err(TryLockError::Poisoned(err)) => {
+                let state = err.into_inner();
+                write!(
+                    f,
+                    "RawMutex {{ owner: {:?}, recursion: {}, handle: {:?}, poisoned: true }}",
+                    state.owner, state.recursion, self.handle,
+                )
+            }
+            Err(TryLockError::WouldBlock) => {
+                write!(f, "RawMutex {{ handle: {:?}, locked: true }}", self.handle)
+            }
+        }
     }
 }
 
@@ -282,10 +323,49 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
 }
 
 impl<T: ?Sized> Debug for Mutex<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result { f.debug_struct("Mutex").finish_non_exhaustive() }
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self.owner.try_lock() {
+            Ok(owner) => f
+                .debug_struct("Mutex")
+                .field("owner", &*owner)
+                .field("handle", &self.handle)
+                .finish(),
+            Err(TryLockError::Poisoned(err)) => {
+                let owner = err.into_inner();
+                f.debug_struct("Mutex")
+                    .field("owner", &*owner)
+                    .field("handle", &self.handle)
+                    .field("poisoned", &true)
+                    .finish()
+            }
+            Err(TryLockError::WouldBlock) => f
+                .debug_struct("Mutex")
+                .field("handle", &self.handle)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 impl<T: ?Sized> Display for Mutex<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result { write!(f, "Mutex") }
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self.owner.try_lock() {
+            Ok(owner) => write!(
+                f,
+                "Mutex {{ owner: {:?}, handle: {:?} }}",
+                *owner, self.handle,
+            ),
+            Err(TryLockError::Poisoned(err)) => {
+                let owner = err.into_inner();
+                write!(
+                    f,
+                    "Mutex {{ owner: {:?}, handle: {:?}, poisoned: true }}",
+                    *owner, self.handle,
+                )
+            }
+            Err(TryLockError::WouldBlock) => {
+                write!(f, "Mutex {{ handle: {:?}, locked: true }}", self.handle)
+            }
+        }
+    }
 }
 
 // ===========================================================================

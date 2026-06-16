@@ -84,7 +84,6 @@ pub fn test_mutex_isr_path() -> Result<()> {
         let guard = mutex.lock_from_isr();
         assert!(guard.is_ok(), "ISR lock must succeed when mutex is free");
         assert_eq!(*guard.unwrap(), 99);
-        // MutexGuardFromIsr Drop is tested implicitly here
     }
 
     // 2. Immediate failure when occupied
@@ -125,11 +124,21 @@ pub fn test_mutex_isr_path() -> Result<()> {
     Ok(())
 }
 
+pub fn test_raw_mutex_handles_are_unique() -> Result<()> {
+    log_info!(TAG, "test_raw_mutex_handles_are_unique");
+    let m1 = RawMutex::new()?;
+    let m2 = RawMutex::new()?;
+    assert_ne!(*m1, *m2, "RawMutex handles must differ");
+    log_info!(TAG, "PASSED");
+    Ok(())
+}
+
 pub fn run_all_tests() -> Result<()> {
     log_info!(TAG, "========== Running Linux-Specific Mutex Tests ==========");
     test_mutex_multi_thread_contention()?;
     test_mutex_poison_recovery()?;
     test_mutex_isr_path()?;
+    test_raw_mutex_handles_are_unique()?;
     log_info!(TAG, "========== All Linux-Specific Mutex Tests PASSED ==========");
     Ok(())
 }
