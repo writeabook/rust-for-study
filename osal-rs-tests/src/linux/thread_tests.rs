@@ -24,13 +24,12 @@
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::time::Duration;
 use alloc::sync::Arc;
 
 use osal_rs::os::*;
 use osal_rs::os::types::TickType;
-use osal_rs::utils::{Error, Result, OsalRsBool};
+use osal_rs::utils::Result;
 use osal_rs::log_info;
 
 const TAG: &str = "LinuxThreadTests";
@@ -157,9 +156,25 @@ pub fn test_thread_notify_from_isr_hpw() -> Result<()> {
     let t = Thread::new("hpw", 1024, 1);
     let mut hpw: i32 = 0;
     t.notify_from_isr(ThreadNotification::SetBits(1), &mut hpw)?;
-    // hpw should be 0 because no thread is waiting
     assert_eq!(hpw, 0, "hpw should be 0 when no waiter is blocked");
     t.delete();
+    log_info!(TAG, "PASSED");
+    Ok(())
+}
+
+pub fn test_thread_get_current_waits_for_notification() -> Result<()> {
+    log_info!(TAG, "test_thread_get_current_waits_for_notification");
+    let mut t = Thread::new("gc", 1024, 1);
+    let spawned = t.spawn(None, |_thread, _p| {
+        // Use get_current(), not the callback parameter
+        let current = Thread::get_current();
+        let v = current.wait_notification(0, 0xFFFF_FFFF, TickType::MAX)?;
+        assert_eq!(v, 0xDEAD);
+        Ok(Arc::new(()))
+    })?;
+    std::thread::sleep(Duration::from_millis(20));
+    spawned.notify(ThreadNotification::SetValueWithOverwrite(0xDEAD))?;
+    spawned.join(core::ptr::null_mut())?;
     log_info!(TAG, "PASSED");
     Ok(())
 }
@@ -180,6 +195,7 @@ pub fn run_all_tests() -> Result<()> {
     test_thread_notify_max_delay()?;
     test_thread_notify_timeout()?;
     test_thread_notify_from_isr_hpw()?;
+    test_thread_get_current_waits_for_notification()?;
     log_info!(TAG, "========== All Linux-Specific Thread Tests PASSED ==========");
     Ok(())
 }

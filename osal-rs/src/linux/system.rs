@@ -398,7 +398,7 @@ impl System {
     /// Returns [`usize::MAX`] on Linux — there is no RTOS heap, and
     /// the process can allocate as much as the OS permits.
     pub fn get_free_heap_size() -> usize {
-        1
+        usize::MAX
     }
 }
 

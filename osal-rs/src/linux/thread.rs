@@ -1,24 +1,3 @@
-/***************************************************************************
- *
- * osal-rs — Linux Thread backend
- *
- * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <https://www.gnu.org/licenses/>.
- *
- ***************************************************************************/
-
 //! Thread management and synchronization for the Linux backend.
 //!
 //! # Design
@@ -191,6 +170,8 @@ pub(crate) fn ensure_main_thread_registered() {
                     spawn_started: false,
                     joined: false,
                     panic_payload: false,
+                    callback_result: None,
+                    delete_requested: false,
                     notification_value: 0,
                     notification_pending: false,
                     waiting_notification: false,
@@ -258,6 +239,8 @@ struct ThreadInner {
     spawn_started: bool,
     joined: bool,
     panic_payload: bool,
+    callback_result: Option<Result<ThreadParam>>,
+    delete_requested: bool,
 
     notification_value: u32,
     notification_pending: bool,
@@ -276,6 +259,8 @@ impl ThreadInner {
             spawn_started: false,
             joined: false,
             panic_payload: false,
+            callback_result: None,
+            delete_requested: false,
             notification_value: 0,
             notification_pending: false,
             waiting_notification: false,
@@ -411,7 +396,8 @@ impl Thread {
 
                 let mut g = recover_lock(core.inner.lock());
                 match result {
-                    Ok(_) => {}
+                    Ok(Ok(param)) => { g.callback_result = Some(Ok(param)); }
+                    Ok(Err(e)) => { g.callback_result = Some(Err(e)); }
                     Err(_) => { g.panic_payload = true; }
                 }
                 g.state = ThreadState::Deleted;
@@ -461,8 +447,15 @@ impl ThreadFn for Thread {
 
     fn delete(&self) {
         let mut g = recover_lock(self.core.inner.lock());
-        g.state = ThreadState::Deleted;
-        unregister_thread(self.core.id);
+        if !g.spawn_started || matches!(g.state, ThreadState::Deleted) {
+            // Not started or already ended: safe to unregister immediately
+            g.state = ThreadState::Deleted;
+            unregister_thread(self.core.id);
+        } else {
+            // Running: request cooperative deletion.
+            // The OS thread cannot be killed; it will exit naturally.
+            g.delete_requested = true;
+        }
         drop(g);
         self.core.condvar.notify_all();
     }
@@ -480,10 +473,16 @@ impl ThreadFn for Thread {
         };
 
         if let Some(jh) = jh {
-            let _ = jh.join(); // wait for the OS thread (panic already caught)
+            let _ = jh.join(); // wait for the OS thread
             let mut g = recover_lock(self.core.inner.lock());
             g.state = ThreadState::Deleted;
-            if g.panic_payload { Err(Error::ThreadJoinFailed) } else { Ok(0) }
+            if g.panic_payload {
+                Err(Error::ThreadJoinFailed)
+            } else if matches!(&g.callback_result, Some(Err(_))) {
+                Err(Error::ThreadJoinFailed)
+            } else {
+                Ok(0)
+            }
         } else {
             Err(Error::ThreadNotStarted)
         }
@@ -528,6 +527,8 @@ impl ThreadFn for Thread {
                 spawn_started: false,
                 joined: false,
                 panic_payload: false,
+                callback_result: None,
+                delete_requested: false,
                 notification_value: 0,
                 notification_pending: false,
                 waiting_notification: false,
