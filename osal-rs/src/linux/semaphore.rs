@@ -350,3 +350,39 @@ impl Display for Semaphore {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Internal poison-recovery tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// After the internal mutex is poisoned, subsequent `wait`, `signal`,
+    /// and ISR operations should still work.
+    #[test]
+    fn semaphore_remains_usable_after_poison() {
+        let sem = Arc::new(Semaphore::new(2, 1).unwrap());
+
+        // Poison the mutex by locking it and panicking.
+        let s = Arc::clone(&sem);
+        let handle = std::thread::spawn(move || {
+            let _guard = s.inner.lock().unwrap();
+            panic!("intentional poison");
+        });
+        // Wait for the panic to poison the lock.
+        let _ = handle.join();
+
+        // After poison: recover_lock is used everywhere, so these must not panic.
+        assert_eq!(sem.wait(Duration::ZERO), OsalRsBool::True);    // count 1→0
+        assert_eq!(sem.wait(Duration::ZERO), OsalRsBool::False);   // count 0
+        assert_eq!(sem.signal(), OsalRsBool::True);                // 0→1
+        assert_eq!(sem.signal(), OsalRsBool::True);                // 1→2
+        assert_eq!(sem.signal(), OsalRsBool::False);               // already max(2)
+
+        assert_eq!(sem.wait_from_isr(), OsalRsBool::True);         // 2→1
+        assert_eq!(sem.signal_from_isr(), OsalRsBool::True);       // 1→2
+    }
+}

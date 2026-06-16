@@ -34,6 +34,13 @@ use super::config::TICK_PERIOD_MS;
 use super::types::TickType;
 use crate::traits::{FromTick, ToTick};
 
+impl ToTick for TickType {
+    /// Identity conversion: a raw tick count is already in ticks.
+    fn to_ticks(&self) -> TickType {
+        *self
+    }
+}
+
 impl ToTick for Duration {
     /// Converts a `Duration` into an OSAL tick count.
     ///
@@ -41,12 +48,16 @@ impl ToTick for Duration {
     /// When the tick period is zero (invalid configuration) the
     /// function returns [`TickType::MAX`] rather than panicking.
     ///
+    /// Very large durations are saturated to [`TickType::MAX`]
+    /// rather than truncated.
+    ///
     /// # Returns
     ///
     /// Number of whole OSAL ticks represented by this duration.
     /// Fractional-tick remainders are truncated (integer division).
     fn to_ticks(&self) -> TickType {
-        let millis = self.as_millis() as TickType;
+        let millis = self.as_millis();
+        let millis = millis.min(TickType::MAX as u128) as TickType;
         let period = TICK_PERIOD_MS as TickType;
 
         if period == 0 {

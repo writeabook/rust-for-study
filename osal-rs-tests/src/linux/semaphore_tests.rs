@@ -54,17 +54,17 @@ fn semaphore_wait_zero_is_non_blocking() -> Result<()> {
 
 /// Thread A blocks on infinite wait.  Thread B calls `signal()` and
 /// Thread A wakes up successfully.
+///
+/// Passing `u32::MAX` works because `ToTick` is implemented for
+/// `TickType` (= `u32`) as an identity conversion, and the semaphore
+/// treats `UBaseType::MAX` (= `u32::MAX`) as an infinite wait.
 fn semaphore_signal_wakes_waiter() -> Result<()> {
     use std::sync::Arc;
-
-    // Duration::from_millis(u32::MAX) produces UBaseType::MAX ticks,
-    // which triggers true infinite wait via Condvar::wait().
-    let infinite = Duration::from_millis(u32::MAX as u64);
 
     let sem = Arc::new(Semaphore::new(1, 0)?);
     let sem_waiter = Arc::clone(&sem);
 
-    let handle = std::thread::spawn(move || sem_waiter.wait(infinite));
+    let handle = std::thread::spawn(move || sem_waiter.wait(u32::MAX));
 
     // Give the waiter time to block on the condvar.
     std::thread::sleep(std::time::Duration::from_millis(20));
