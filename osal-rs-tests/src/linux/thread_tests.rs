@@ -1,24 +1,3 @@
-/***************************************************************************
- *
- * osal-rs — Linux-specific thread tests
- *
- * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <https://www.gnu.org/licenses/>.
- *
- ***************************************************************************/
-
 //! Linux-specific thread tests (registry, handles, state machine,
 //! notifications, spawn lifecycle).
 
@@ -180,6 +159,122 @@ pub fn test_thread_get_current_waits_for_notification() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Cooperative cancellation
+// ---------------------------------------------------------------------------
+
+/// After `delete()` is called on a running thread, `is_delete_requested()`
+/// returns `true`.
+pub fn test_thread_delete_sets_cancellation_flag() -> Result<()> {
+    log_info!(TAG, "test_thread_delete_sets_cancellation_flag");
+    let mut t = Thread::new("cancel", 1024, 1);
+    let spawned = t.spawn_simple(|| {
+        while !Thread::get_current().is_delete_requested() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    })?;
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    spawned.delete();
+    assert!(spawned.is_delete_requested());
+
+    spawned.join(core::ptr::null_mut())?;
+    log_info!(TAG, "PASSED");
+    Ok(())
+}
+
+/// Thread polls `current_cancellation_requested()`, exits naturally after
+/// `delete()`, and `join()` succeeds.
+pub fn test_thread_cooperative_cancellation_exits() -> Result<()> {
+    log_info!(TAG, "test_thread_cooperative_cancellation_exits");
+    use std::sync::{
+        Arc as StdArc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let exited = StdArc::new(AtomicBool::new(false));
+    let exited_worker = StdArc::clone(&exited);
+
+    let mut t = Thread::new("coop", 1024, 1);
+    let spawned = t.spawn_simple(move || {
+        while !Thread::current_cancellation_requested() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        exited_worker.store(true, Ordering::SeqCst);
+    })?;
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    spawned.delete();
+    spawned.join(core::ptr::null_mut())?;
+
+    assert!(exited.load(Ordering::SeqCst));
+    log_info!(TAG, "PASSED");
+    Ok(())
+}
+
+/// When a thread is blocked in `wait_notification(TickType::MAX)`,
+/// `delete()` wakes it up and causes it to return an error.
+pub fn test_thread_delete_wakes_wait_notification() -> Result<()> {
+    log_info!(TAG, "test_thread_delete_wakes_wait_notification");
+    use std::sync::{
+        Arc as StdArc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let returned = StdArc::new(AtomicBool::new(false));
+    let returned_worker = StdArc::clone(&returned);
+
+    let mut t = Thread::new("wait_cancel", 1024, 1);
+    let spawned = t.spawn_simple(move || {
+        let current = Thread::get_current();
+        let result = current.wait_notification(0, 0, TickType::MAX);
+        assert!(result.is_err());
+        assert!(current.is_delete_requested());
+        returned_worker.store(true, Ordering::SeqCst);
+    })?;
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    spawned.delete();
+    spawned.join(core::ptr::null_mut())?;
+
+    assert!(returned.load(Ordering::SeqCst));
+    log_info!(TAG, "PASSED");
+    Ok(())
+}
+
+/// Deleting an unstarted thread marks it as Deleted/Invalid in the registry.
+pub fn test_thread_delete_before_spawn_marks_deleted() -> Result<()> {
+    log_info!(TAG, "test_thread_delete_before_spawn_marks_deleted");
+    let t = Thread::new("not_started", 1024, 1);
+    let handle = *t;
+
+    t.delete();
+
+    let meta = Thread::get_metadata_from_handle(handle);
+    assert!(matches!(meta.state, ThreadState::Invalid | ThreadState::Deleted));
+    log_info!(TAG, "PASSED");
+    Ok(())
+}
+
+/// After a thread completes and is joined, the registry no longer returns
+/// its metadata.
+pub fn test_thread_join_unregisters_completed_thread() -> Result<()> {
+    log_info!(TAG, "test_thread_join_unregisters_completed_thread");
+    let mut t = Thread::new("join_unreg", 1024, 1);
+    let spawned = t.spawn_simple(|| {})?;
+    let handle = *spawned;
+
+    spawned.join(core::ptr::null_mut())?;
+
+    let meta = Thread::get_metadata_from_handle(handle);
+    assert_eq!(meta.state, ThreadState::Invalid);
+    log_info!(TAG, "PASSED");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Run all
 // ---------------------------------------------------------------------------
 
@@ -196,6 +291,11 @@ pub fn run_all_tests() -> Result<()> {
     test_thread_notify_timeout()?;
     test_thread_notify_from_isr_hpw()?;
     test_thread_get_current_waits_for_notification()?;
+    test_thread_delete_sets_cancellation_flag()?;
+    test_thread_cooperative_cancellation_exits()?;
+    test_thread_delete_wakes_wait_notification()?;
+    test_thread_delete_before_spawn_marks_deleted()?;
+    test_thread_join_unregisters_completed_thread()?;
     log_info!(TAG, "========== All Linux-Specific Thread Tests PASSED ==========");
     Ok(())
 }

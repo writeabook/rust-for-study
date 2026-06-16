@@ -17,8 +17,13 @@
 //! - `suspend` / `resume` are no-ops.
 //! - `wait_notification(TickType::MAX)` uses `Condvar::wait()` for true
 //!   infinite blocking.
+//! - Cooperative cancellation: `delete()` on Linux cannot force-kill
+//!   running `std::thread`s. It records a cancellation request, wakes
+//!   blocked waiters, and relies on callbacks polling
+//!   `is_delete_requested()` / `is_cancellation_requested()` and returning
+//!   naturally.  `join()` waits for OS-thread completion and unregisters
+//!   from the registry.
 
-use core::any::Any;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -26,13 +31,12 @@ use core::time::Duration;
 
 use alloc::boxed::Box;
 use std::collections::HashMap;
-use alloc::string::ToString;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
 use std::panic::catch_unwind;
 use std::panic::AssertUnwindSafe;
-use std::sync::{Condvar, Mutex as StdMutex, OnceLock};
+use std::sync::{Condvar, Mutex as StdMutex, OnceLock, TryLockError};
 use std::thread::{Builder as ThreadBuilder, JoinHandle, ThreadId};
 
 use super::types::{BaseType, StackType, ThreadHandle, TickType, UBaseType};
@@ -240,6 +244,8 @@ struct ThreadInner {
     joined: bool,
     panic_payload: bool,
     callback_result: Option<Result<ThreadParam>>,
+    /// Set to `true` when `delete()` is called on a running thread.
+    /// Callbacks should poll `is_delete_requested()` and exit naturally.
     delete_requested: bool,
 
     notification_value: u32,
@@ -361,7 +367,45 @@ impl Thread {
         self.wait_notification(bits_clear_entry, bits_clear_exit, timeout.to_ticks())
     }
 
+    // -- cancellation query helpers (inherent, not in trait) ------------------
+
+    /// Returns `true` if `delete()` has been called on this running thread.
+    ///
+    /// On Linux `delete()` cannot force-kill `std::thread`s, so it only
+    /// records a cooperative cancellation request.  Long-running callbacks
+    /// should poll this method and return naturally when it becomes `true`.
+    pub fn is_delete_requested(&self) -> bool {
+        recover_lock(self.core.inner.lock()).delete_requested
+    }
+
+    /// Alias for [`is_delete_requested`](Self::is_delete_requested) — more
+    /// descriptive name for cooperative cancellation checks.
+    pub fn is_cancellation_requested(&self) -> bool {
+        self.is_delete_requested()
+    }
+
+    /// Convenience: queries `is_delete_requested()` on the current thread.
+    ///
+    /// This is equivalent to
+    /// `Thread::get_current().is_delete_requested()` but shorter to write
+    /// inside thread callbacks.
+    pub fn current_cancellation_requested() -> bool {
+        Self::get_current().is_delete_requested()
+    }
+
     // -- spawn helpers ------------------------------------------------------
+
+    /// Non-blocking try-lock for ISR simulation paths.
+    ///
+    /// Recovers from poisoned mutexes; only returns `Err(())` on
+    /// `TryLockError::WouldBlock`.
+    fn try_lock_inner(&self) -> core::result::Result<std::sync::MutexGuard<'_, ThreadInner>, ()> {
+        match self.core.inner.try_lock() {
+            Ok(g) => Ok(g),
+            Err(TryLockError::Poisoned(err)) => Ok(err.into_inner()),
+            Err(TryLockError::WouldBlock) => Err(()),
+        }
+    }
 
     fn spawn_inner<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
     where
@@ -400,6 +444,8 @@ impl Thread {
                     Ok(Err(e)) => { g.callback_result = Some(Err(e)); }
                     Err(_) => { g.panic_payload = true; }
                 }
+                // Keep delete_requested as historical metadata — it tells
+                // whether termination was externally requested.
                 g.state = ThreadState::Deleted;
                 drop(g);
                 core.condvar.notify_all();
@@ -445,19 +491,42 @@ impl ThreadFn for Thread {
         self.spawn_simple_inner(callback)
     }
 
+    /// Requests cooperative cancellation of this thread.
+    ///
+    /// On Linux this does **not** forcefully terminate the OS thread.
+    /// Instead:
+    /// - `delete_requested` is set to `true`.
+    /// - Blocked waiters are woken via the condvar.
+    /// - Threads that have not started or have already ended are
+    ///   immediately unregistered from the registry.
+    ///
+    /// Running threads should poll
+    /// [`is_delete_requested()`](Self::is_delete_requested) /
+    /// [`is_cancellation_requested()`](Self::is_cancellation_requested) and
+    /// return naturally.  Call [`join()`](Self::join) afterwards to wait
+    /// for OS-thread completion.
     fn delete(&self) {
-        let mut g = recover_lock(self.core.inner.lock());
-        if !g.spawn_started || matches!(g.state, ThreadState::Deleted) {
-            // Not started or already ended: safe to unregister immediately
-            g.state = ThreadState::Deleted;
-            unregister_thread(self.core.id);
-        } else {
-            // Running: request cooperative deletion.
-            // The OS thread cannot be killed; it will exit naturally.
+        let should_unregister = {
+            let mut g = recover_lock(self.core.inner.lock());
+
             g.delete_requested = true;
-        }
-        drop(g);
+
+            if !g.spawn_started || matches!(g.state, ThreadState::Deleted) {
+                // Not started or already ended: safe to unregister.
+                g.state = ThreadState::Deleted;
+                true
+            } else {
+                // Running or blocked: cannot kill std::thread.
+                // Mark cancellation and wake blocking callers.
+                false
+            }
+        };
+
         self.core.condvar.notify_all();
+
+        if should_unregister {
+            unregister_thread(self.core.id);
+        }
     }
 
     fn suspend(&self) {}
@@ -474,15 +543,28 @@ impl ThreadFn for Thread {
 
         if let Some(jh) = jh {
             let _ = jh.join(); // wait for the OS thread
-            let mut g = recover_lock(self.core.inner.lock());
-            g.state = ThreadState::Deleted;
-            if g.panic_payload {
-                Err(Error::ThreadJoinFailed)
-            } else if matches!(&g.callback_result, Some(Err(_))) {
-                Err(Error::ThreadJoinFailed)
-            } else {
-                Ok(0)
+
+            let result = {
+                let g = recover_lock(self.core.inner.lock());
+                if g.panic_payload {
+                    Err(Error::ThreadJoinFailed)
+                } else if matches!(&g.callback_result, Some(Err(_))) {
+                    Err(Error::ThreadJoinFailed)
+                } else {
+                    Ok(0)
+                }
+            };
+
+            // Unregister now that the OS thread has been reclaimed.
+            unregister_thread(self.core.id);
+
+            // Mark state as Deleted so further queries are consistent.
+            {
+                let mut g = recover_lock(self.core.inner.lock());
+                g.state = ThreadState::Deleted;
             }
+
+            result
         } else {
             Err(Error::ThreadNotStarted)
         }
@@ -561,7 +643,7 @@ impl ThreadFn for Thread {
     }
 
     fn notify_from_isr(&self, notification: ThreadNotification, hpw: &mut BaseType) -> Result<()> {
-        let mut g = match self.core.inner.try_lock() {
+        let mut g = match self.try_lock_inner() {
             Ok(g) => g,
             Err(_) => { *hpw = 0; return Err(Error::QueueFull); }
         };
@@ -589,12 +671,17 @@ impl ThreadFn for Thread {
         let mut g = recover_lock(self.core.inner.lock());
         g.notification_value &= !bits_clear_entry;
 
-        // Fast path: already pending
+        // Fast path: already pending — return immediately.
         if g.notification_pending {
             let v = g.notification_value;
             g.notification_value &= !bits_clear_exit;
             g.notification_pending = false;
             return Ok(v);
+        }
+
+        // Cancellation request takes priority over further waiting.
+        if g.delete_requested || g.state == ThreadState::Deleted {
+            return Err(Error::Timeout);
         }
 
         if timeout_ticks == 0 {
@@ -607,9 +694,16 @@ impl ThreadFn for Thread {
             g.state = ThreadState::Blocked;
             loop {
                 g = recover_lock(self.core.condvar.wait(g));
-                if g.state == ThreadState::Deleted {
+
+                // Cancellation or deletion takes priority.
+                if g.delete_requested || g.state == ThreadState::Deleted {
+                    g.waiting_notification = false;
+                    if !matches!(g.state, ThreadState::Deleted) {
+                        g.state = ThreadState::Running;
+                    }
                     return Err(Error::Timeout);
                 }
+
                 if g.notification_pending {
                     let v = g.notification_value;
                     g.notification_value &= !bits_clear_exit;
@@ -641,7 +735,12 @@ impl ThreadFn for Thread {
             let (new_g, wait_result) = recover_lock(self.core.condvar.wait_timeout(g, remaining));
             g = new_g;
 
-            if g.state == ThreadState::Deleted {
+            // Cancellation or deletion takes priority.
+            if g.delete_requested || g.state == ThreadState::Deleted {
+                g.waiting_notification = false;
+                if !matches!(g.state, ThreadState::Deleted) {
+                    g.state = ThreadState::Running;
+                }
                 return Err(Error::Timeout);
             }
 
@@ -675,8 +774,28 @@ impl Debug for Thread {
                 .field("name", &g.name)
                 .field("priority", &g.priority)
                 .field("state", &g.state)
+                .field("delete_requested", &g.delete_requested)
+                .field("spawn_started", &g.spawn_started)
+                .field("joined", &g.joined)
                 .finish(),
-            Err(_) => f.debug_struct("Thread").finish_non_exhaustive(),
+            Err(TryLockError::Poisoned(err)) => {
+                let g = err.into_inner();
+                f.debug_struct("Thread")
+                    .field("id", &self.core.id)
+                    .field("name", &g.name)
+                    .field("priority", &g.priority)
+                    .field("state", &g.state)
+                    .field("delete_requested", &g.delete_requested)
+                    .field("spawn_started", &g.spawn_started)
+                    .field("joined", &g.joined)
+                    .field("poisoned", &true)
+                    .finish()
+            }
+            Err(TryLockError::WouldBlock) => {
+                f.debug_struct("Thread")
+                    .field("id", &self.core.id)
+                    .finish_non_exhaustive()
+            }
         }
     }
 }
@@ -684,8 +803,54 @@ impl Debug for Thread {
 impl Display for Thread {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self.core.inner.try_lock() {
-            Ok(g) => write!(f, "Thread {{ id: {}, name: {}, priority: {} }}", self.core.id, g.name, g.priority),
-            Err(_) => write!(f, "Thread {{ <locked> }}"),
+            Ok(g) => write!(
+                f,
+                "Thread {{ id: {}, name: {}, priority: {}, state: {:?}, delete_requested: {} }}",
+                self.core.id, g.name, g.priority, g.state, g.delete_requested
+            ),
+            Err(TryLockError::Poisoned(err)) => {
+                let g = err.into_inner();
+                write!(
+                    f,
+                    "Thread {{ id: {}, name: {}, priority: {}, state: {:?}, delete_requested: {}, poisoned: true }}",
+                    self.core.id, g.name, g.priority, g.state, g.delete_requested
+                )
+            }
+            Err(TryLockError::WouldBlock) => {
+                write!(f, "Thread {{ id: {}, locked: true }}", self.core.id)
+            }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal poison-recovery test
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    /// After the thread's internal mutex is poisoned, `try_lock_inner()`
+    /// should recover and `notify_from_isr` should continue to work.
+    #[test]
+    fn thread_try_lock_inner_recovers_from_poison() {
+        let thread = Thread::new("poison", 1024, 1);
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = thread.core.inner.lock().unwrap();
+            panic!("poison thread mutex");
+        }));
+
+        // is_delete_requested uses recover_lock — must not panic.
+        assert!(!thread.is_delete_requested());
+
+        // notify_from_isr uses try_lock_inner — must recover and succeed.
+        let mut hpw = 0;
+        assert!(thread.notify_from_isr(
+            ThreadNotification::SetBits(0b1),
+            &mut hpw,
+        ).is_ok());
     }
 }
