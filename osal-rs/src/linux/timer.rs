@@ -10,7 +10,8 @@
 //! # State machine
 //!
 //! ```text
-//! Stopped → Armed     (start/reset/change_period)
+//! Stopped → Armed     (start/reset)
+//! Stopped + change_period → Stopped, only update period
 //! Armed   → Executing (deadline reached)
 //! Armed   → Stopped   (stop/delete)
 //! Executing → Armed   (periodic auto-reload, or command in callback)

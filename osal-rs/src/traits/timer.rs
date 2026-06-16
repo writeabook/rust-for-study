@@ -372,10 +372,9 @@ pub trait Timer {
     
     /// Changes the timer period.
     ///
-    /// Updates the timer period. The new period takes effect immediately:
-    /// - If the timer is running, it continues with the new period
-    /// - The remaining time is adjusted proportionally
-    /// - For periodic timers, future expirations use the new period
+    /// - If the timer is running, the timer is restarted from the time this
+    /// - command is processed using the new period. If the timer is stopped,
+    /// - the new period is stored and will be used when the timer is started.
     ///
     /// # Parameters
     ///
