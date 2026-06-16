@@ -429,9 +429,18 @@ impl TimerFn for Timer {
         let mut inner = recover_lock(self.core.inner.lock());
         if inner.state == TimerState::Deleted { return OsalRsBool::False; }
         inner.period = new_period;
-        command_arm(&mut inner, new_period);
+        // If the timer is already Armed (or Executing), restart with the new
+        // period.  If Stopped, only store the period — the timer stays
+        // Stopped (matching the trait contract: "if stopped, new period takes
+        // effect when started").
+        let was_stopped = inner.state == TimerState::Stopped;
+        if !was_stopped {
+            command_arm(&mut inner, new_period);
+        }
         drop(inner);
-        self.core.condvar.notify_all();
+        if !was_stopped {
+            self.core.condvar.notify_all();
+        }
         OsalRsBool::True
     }
 
