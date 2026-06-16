@@ -9,7 +9,7 @@
 //!
 //! # Design
 //!
-//! - **State**: A `StdMutex<EventBits>` holds the current bit flags.
+//! - **State**: A `StdMutex<EventGroupState>` holds the current bit flags.
 //! - **Blocking wait**: `wait(mask, timeout)` uses `Condvar::wait_timeout`
 //!   to block until at least one bit in the mask is set, or the timeout
 //!   expires.  Wait uses **OR** semantics (any bit in the mask) matching
@@ -26,15 +26,44 @@
 
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
-use std::sync::{Condvar, Mutex as StdMutex};
+use std::sync::{Condvar, Mutex as StdMutex, MutexGuard as StdMutexGuard, TryLockError};
 use std::time::Instant;
 
 use crate::traits::EventGroupFn;
 use crate::traits::ToTick;
+use crate::utils::{Error, Result};
+
 use super::types::{EventBits, EventGroupHandle, TickType};
-use crate::utils::{Error, Result, MAX_DELAY};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+type EventGroupState = usize;
+
+/// Recovers from a poisoned mutex lock.  This keeps the event group usable
+/// even after a panic inside a critical section.
+fn recover_lock<T>(result: std::sync::LockResult<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Global atomic counter for allocating unique `EventGroupHandle` values.
+static NEXT_EVENT_GROUP_HANDLE: AtomicUsize = AtomicUsize::new(1);
+
+/// Allocates the next unique event group handle.
+fn next_event_group_handle() -> EventGroupHandle {
+    NEXT_EVENT_GROUP_HANDLE
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .expect("Linux event group handle space exhausted") as EventGroupHandle
+}
 
 // ---------------------------------------------------------------------------
 // EventGroup — multi-bit flag synchronization on stdlib primitives
@@ -67,9 +96,8 @@ use crate::utils::{Error, Result, MAX_DELAY};
 /// }
 /// ```
 pub struct EventGroup {
-    inner: StdMutex<usize>,
+    inner: StdMutex<EventGroupState>,
     condvar: Condvar,
-    /// Dummy handle for API surface compatibility (Deref target).
     handle: EventGroupHandle,
 }
 
@@ -110,7 +138,7 @@ impl EventGroup {
         Ok(Self {
             inner: StdMutex::new(0),
             condvar: Condvar::new(),
-            handle: 1 as EventGroupHandle,
+            handle: next_event_group_handle(),
         })
     }
 
@@ -132,6 +160,18 @@ impl EventGroup {
     pub fn wait_with_to_tick(&self, mask: EventBits, timeout_ticks: impl ToTick) -> EventBits {
         self.wait(mask, timeout_ticks.to_ticks())
     }
+
+    /// Non-blocking try-lock for ISR simulation paths.
+    ///
+    /// Recovers from poisoned mutexes; only returns `Err(())` on
+    /// `TryLockError::WouldBlock`.
+    fn try_lock_state(&self) -> core::result::Result<StdMutexGuard<'_, EventGroupState>, ()> {
+        match self.inner.try_lock() {
+            Ok(state) => Ok(state),
+            Err(TryLockError::Poisoned(err)) => Ok(err.into_inner()),
+            Err(TryLockError::WouldBlock) => Err(()),
+        }
+    }
 }
 
 impl EventGroupFn for EventGroup {
@@ -140,30 +180,39 @@ impl EventGroupFn for EventGroup {
     /// Any tasks waiting for these bits will be unblocked if their wait
     /// conditions are now satisfied (any bit in their mask is set).
     ///
+    /// Reserved bits (above [`Self::MAX_MASK`]) are silently ignored.
+    ///
     /// # Parameters
     ///
     /// * `bits` — The bits to set (bitwise OR with current value).
     ///
     /// # Returns
     ///
-    /// The event bits value **after** the bits were set.
-    /// This is a snapshot at return time; if another task clears some bits
-    /// between the set and the return, the returned value may not contain
-    /// all requested bits.
+    /// The event bits value **after** the bits were set, with reserved
+    /// bits masked out.
     fn set(&self, bits: EventBits) -> EventBits {
-        let mut state = self.inner.lock().unwrap();
-        *state |= bits as usize;
-        let current_bits = *state;
-        // Wake ALL waiting threads — any of them may now have their
-        // condition satisfied (OR semantics).
-        self.condvar.notify_all();
-        current_bits as EventBits
+        let bits = bits & Self::MAX_MASK;
+
+        let mut state = recover_lock(self.inner.lock());
+        *state |= bits as EventGroupState;
+        let current_bits = (*state as EventBits) & Self::MAX_MASK;
+
+        drop(state);
+
+        if bits != 0 {
+            self.condvar.notify_all();
+        }
+
+        current_bits
     }
 
     /// Sets event bits from ISR context (non-blocking).
     ///
     /// On Linux this uses `StdMutex::try_lock`.  If the lock cannot be
-    /// acquired immediately, the call returns `Err(Error::QueueFull)`.
+    /// acquired immediately (not poisoned), the call returns
+    /// `Err(Error::QueueFull)`.
+    ///
+    /// Reserved bits (above [`Self::MAX_MASK`]) are silently ignored.
     ///
     /// # Parameters
     ///
@@ -174,10 +223,17 @@ impl EventGroupFn for EventGroup {
     /// * `Ok(())` — Bits set successfully.
     /// * `Err(Error)` — Lock busy, operation could not complete.
     fn set_from_isr(&self, bits: EventBits) -> Result<()> {
-        match self.inner.try_lock() {
+        let bits = bits & Self::MAX_MASK;
+
+        match self.try_lock_state() {
             Ok(mut state) => {
-                *state |= bits as usize;
-                self.condvar.notify_all();
+                *state |= bits as EventGroupState;
+                drop(state);
+
+                if bits != 0 {
+                    self.condvar.notify_all();
+                }
+
                 Ok(())
             }
             Err(_) => Err(Error::QueueFull),
@@ -186,12 +242,14 @@ impl EventGroupFn for EventGroup {
 
     /// Gets the current value of all event bits (non-blocking).
     ///
+    /// Reserved bits are masked out of the returned value.
+    ///
     /// # Returns
     ///
-    /// Current state of all event bits.
+    /// Current state of event bits with reserved bits masked.
     fn get(&self) -> EventBits {
-        let state = self.inner.lock().unwrap();
-        *state as EventBits
+        let state = recover_lock(self.inner.lock());
+        (*state as EventBits) & Self::MAX_MASK
     }
 
     /// Gets event bits from ISR context (non-blocking).
@@ -199,17 +257,22 @@ impl EventGroupFn for EventGroup {
     /// On Linux this uses `StdMutex::try_lock`.  If the lock cannot be
     /// acquired immediately, returns `0`.
     ///
+    /// Reserved bits are masked out of the returned value.
+    ///
     /// # Returns
     ///
-    /// Current state of all event bits, or `0` if the lock is busy.
+    /// Current state of event bits with reserved bits masked, or `0` if
+    /// the lock is busy (not poisoned).
     fn get_from_isr(&self) -> EventBits {
-        match self.inner.try_lock() {
-            Ok(state) => *state as EventBits,
+        match self.try_lock_state() {
+            Ok(state) => (*state as EventBits) & Self::MAX_MASK,
             Err(_) => 0,
         }
     }
 
     /// Clears the specified event bits (AND NOT operation).
+    ///
+    /// Reserved bits (above [`Self::MAX_MASK`]) are silently ignored.
     ///
     /// # Parameters
     ///
@@ -217,21 +280,22 @@ impl EventGroupFn for EventGroup {
     ///
     /// # Returns
     ///
-    /// The event bits value **after** the bits were cleared.
-    /// This is a snapshot at return time; if another task sets some bits
-    /// between the clear and the return, the returned value may not reflect
-    /// the cleared state.
+    /// The event bits value **after** the bits were cleared, with
+    /// reserved bits masked out.
     fn clear(&self, bits: EventBits) -> EventBits {
-        let mut state = self.inner.lock().unwrap();
-        *state &= !(bits as usize);
-        let current_bits = *state;
-        current_bits as EventBits
+        let bits = bits & Self::MAX_MASK;
+
+        let mut state = recover_lock(self.inner.lock());
+        *state &= !(bits as EventGroupState);
+        (*state as EventBits) & Self::MAX_MASK
     }
 
     /// Clears event bits from ISR context (non-blocking).
     ///
     /// On Linux this uses `StdMutex::try_lock`.  If the lock cannot be
-    /// acquired immediately, returns `Err(Error::QueueFull)`.
+    /// acquired immediately (not poisoned), returns `Err(Error::QueueFull)`.
+    ///
+    /// Reserved bits (above [`Self::MAX_MASK`]) are silently ignored.
     ///
     /// # Parameters
     ///
@@ -242,9 +306,11 @@ impl EventGroupFn for EventGroup {
     /// * `Ok(())` — Bits cleared successfully.
     /// * `Err(Error)` — Lock busy, operation could not complete.
     fn clear_from_isr(&self, bits: EventBits) -> Result<()> {
-        match self.inner.try_lock() {
+        let bits = bits & Self::MAX_MASK;
+
+        match self.try_lock_state() {
             Ok(mut state) => {
-                *state &= !(bits as usize);
+                *state &= !(bits as EventGroupState);
                 Ok(())
             }
             Err(_) => Err(Error::QueueFull),
@@ -257,6 +323,10 @@ impl EventGroupFn for EventGroup {
     /// are set, or until the timeout expires.  The bits are **not**
     /// cleared automatically.
     ///
+    /// Reserved bits in the mask are silently ignored.  If the resulting
+    /// mask is 0, the current bits are returned immediately without
+    /// blocking.
+    ///
     /// # Parameters
     ///
     /// * `mask` — Bit mask of bits to wait for (waits for ANY bit in mask).
@@ -267,8 +337,9 @@ impl EventGroupFn for EventGroup {
     ///
     /// # Returns
     ///
-    /// The event bits value when the function returns.  Check if any bit
-    /// in the mask is set to determine if the wait succeeded:
+    /// The event bits value (with reserved bits masked) when the
+    /// function returns.  Check if any bit in the mask is set to
+    /// determine if the wait succeeded:
     ///
     /// ```ignore
     /// let result = events.wait(mask, timeout);
@@ -277,43 +348,65 @@ impl EventGroupFn for EventGroup {
     /// }
     /// ```
     fn wait(&self, mask: EventBits, timeout_ticks: TickType) -> EventBits {
-        let mask_usize = mask as usize;
-        let mut state = self.inner.lock().unwrap();
+        let mask = mask & Self::MAX_MASK;
+        let mask_usize = mask as EventGroupState;
+
+        let mut state = recover_lock(self.inner.lock());
+
+        // Mask == 0: return current bits immediately; nothing to wait for.
+        if mask == 0 {
+            return (*state as EventBits) & Self::MAX_MASK;
+        }
 
         // Fast path: condition already satisfied.
         if *state & mask_usize != 0 {
-            return *state as EventBits;
+            return (*state as EventBits) & Self::MAX_MASK;
         }
 
         // Zero timeout — return immediately with current value.
         if timeout_ticks == 0 {
-            return *state as EventBits;
+            return (*state as EventBits) & Self::MAX_MASK;
         }
 
-        // Convert ticks to Duration for Condvar.
-        let timeout = if timeout_ticks == TickType::MAX {
-            MAX_DELAY
-        } else {
-            // ticks are in milliseconds (TICK_PERIOD_MS = 1)
-            Duration::from_millis(timeout_ticks as u64)
+        // True infinite wait: block forever until signaled.
+        if timeout_ticks == TickType::MAX {
+            loop {
+                state = recover_lock(self.condvar.wait(state));
+
+                if *state & mask_usize != 0 {
+                    return (*state as EventBits) & Self::MAX_MASK;
+                }
+            }
+        }
+
+        // Finite wait with deadline loop.
+        let timeout = Duration::from_millis(timeout_ticks as u64);
+        let deadline = match Instant::now().checked_add(timeout) {
+            Some(deadline) => deadline,
+            None => return (*state as EventBits) & Self::MAX_MASK,
         };
 
-        let deadline = Instant::now() + timeout;
         loop {
-            let elapsed = Instant::now();
-            if elapsed >= deadline {
-                // Timeout — return current bits (may be zero).
-                return *state as EventBits;
-            }
-            let remaining = deadline - elapsed;
+            let now = Instant::now();
 
-            state = self.condvar.wait_timeout(state, remaining).unwrap().0;
+            if now >= deadline {
+                return (*state as EventBits) & Self::MAX_MASK;
+            }
+
+            let remaining = deadline - now;
+
+            let (next_state, timeout_result) =
+                recover_lock(self.condvar.wait_timeout(state, remaining));
+
+            state = next_state;
 
             if *state & mask_usize != 0 {
-                return *state as EventBits;
+                return (*state as EventBits) & Self::MAX_MASK;
             }
 
-            // Spurious wakeup — loop again with updated remaining time.
+            if timeout_result.timed_out() {
+                return (*state as EventBits) & Self::MAX_MASK;
+            }
         }
     }
 
@@ -332,9 +425,27 @@ impl Debug for EventGroup {
         match self.inner.try_lock() {
             Ok(state) => f
                 .debug_struct("EventGroup")
-                .field("bits", &format_args!("0x{:08X}", *state))
+                .field(
+                    "bits",
+                    &format_args!("0x{:08X}", (*state as EventBits) & Self::MAX_MASK),
+                )
+                .field("handle", &self.handle)
                 .finish(),
-            Err(_) => f.debug_struct("EventGroup").finish_non_exhaustive(),
+            Err(TryLockError::Poisoned(err)) => {
+                let state = err.into_inner();
+                f.debug_struct("EventGroup")
+                    .field(
+                        "bits",
+                        &format_args!("0x{:08X}", (*state as EventBits) & Self::MAX_MASK),
+                    )
+                    .field("handle", &self.handle)
+                    .field("poisoned", &true)
+                    .finish()
+            }
+            Err(TryLockError::WouldBlock) => f
+                .debug_struct("EventGroup")
+                .field("handle", &self.handle)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -342,8 +453,63 @@ impl Debug for EventGroup {
 impl Display for EventGroup {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self.inner.try_lock() {
-            Ok(state) => write!(f, "EventGroup {{ bits: 0x{:08X} }}", *state),
-            Err(_) => write!(f, "EventGroup {{ <locked> }}"),
+            Ok(state) => write!(
+                f,
+                "EventGroup {{ bits: 0x{:08X}, handle: {} }}",
+                (*state as EventBits) & Self::MAX_MASK,
+                self.handle as usize,
+            ),
+            Err(TryLockError::Poisoned(err)) => {
+                let state = err.into_inner();
+                write!(
+                    f,
+                    "EventGroup {{ bits: 0x{:08X}, handle: {}, poisoned: true }}",
+                    (*state as EventBits) & Self::MAX_MASK,
+                    self.handle as usize,
+                )
+            }
+            Err(TryLockError::WouldBlock) => write!(
+                f,
+                "EventGroup {{ handle: {}, locked: true }}",
+                self.handle as usize,
+            ),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal poison-recovery tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    /// After the internal mutex is poisoned, subsequent operations should
+    /// still work without panicking.
+    #[test]
+    fn event_group_recovers_from_poisoned_lock() {
+        let events = EventGroup::new().unwrap();
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = events.inner.lock().unwrap();
+            panic!("poison event group mutex");
+        }));
+
+        // All operations must continue to work after poison recovery.
+        assert_eq!(events.get(), 0);
+
+        let bits = events.set(0b0001);
+        assert_ne!(bits & 0b0001, 0);
+
+        let waited = events.wait(0b0001, 0);
+        assert_ne!(waited & 0b0001, 0);
+
+        assert!(events.clear_from_isr(0b0001).is_ok());
+        assert_eq!(events.get_from_isr() & 0b0001, 0);
+
+        assert!(events.set_from_isr(0b0010).is_ok());
+        assert_ne!(events.get() & 0b0010, 0);
     }
 }
