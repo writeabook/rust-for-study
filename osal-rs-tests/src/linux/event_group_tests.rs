@@ -15,6 +15,7 @@ pub fn run_all_tests() -> Result<()> {
     event_group_handles_are_unique()?;
     event_group_wait_zero_is_non_blocking()?;
     event_group_wait_max_blocks_until_set()?;
+    event_group_finite_wait_wakes_before_timeout()?;
     event_group_isr_paths_are_non_blocking()?;
     event_group_reserved_bits_are_masked()?;
     event_group_clear_reserved_bits_is_noop()?;
@@ -55,22 +56,55 @@ fn event_group_wait_zero_is_non_blocking() -> Result<()> {
 
 /// Thread A blocks on `wait(mask, TickType::MAX)`.  Thread B sets a
 /// matching bit and Thread A wakes up successfully.
+///
+/// Uses a `Barrier` to ensure the waiter thread has truly begun
+/// blocking before the signal is sent, making the test rigorous.
 fn event_group_wait_max_blocks_until_set() -> Result<()> {
+    use std::sync::{Arc, Barrier};
+
+    let barrier = Arc::new(Barrier::new(2));
+    let events = Arc::new(EventGroup::new()?);
+    let waiter_events = Arc::clone(&events);
+    let waiter_barrier = Arc::clone(&barrier);
+
+    let handle = std::thread::spawn(move || {
+        waiter_barrier.wait(); // signal: waiter about to enter wait()
+        waiter_events.wait(0b0010, TickType::MAX)
+    });
+
+    barrier.wait(); // both threads ready; waiter will now block
+    // Brief yield to let the waiter thread acquire the lock and block on the condvar.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    events.set(0b0010);
+
+    let result = handle.join().unwrap();
+    assert_ne!(result & 0b0010, 0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Finite wait with successful wake-up
+// ---------------------------------------------------------------------------
+
+/// Thread A blocks on `wait(mask, finite_ticks)`.  Thread B sets a
+/// matching bit before the timeout expires, and Thread A wakes up
+/// successfully (exercises the `wait_timeout` wake-up path).
+fn event_group_finite_wait_wakes_before_timeout() -> Result<()> {
     use std::sync::Arc;
 
     let events = Arc::new(EventGroup::new()?);
     let waiter_events = Arc::clone(&events);
 
-    let handle = std::thread::spawn(move || waiter_events.wait(0b0010, TickType::MAX));
+    let handle = std::thread::spawn(move || waiter_events.wait(0b0100, 200 as TickType));
 
     // Give the waiter time to block on the condvar.
     std::thread::sleep(std::time::Duration::from_millis(20));
-
-    events.set(0b0010);
+    events.set(0b0100);
 
     let result = handle.join().unwrap();
+    assert_ne!(result & 0b0100, 0);
 
-    assert_ne!(result & 0b0010, 0);
     Ok(())
 }
 
