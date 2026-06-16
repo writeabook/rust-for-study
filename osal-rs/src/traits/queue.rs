@@ -78,8 +78,10 @@ use crate::utils::Result;
 ///
 /// # Memory Layout
 ///
-/// The queue capacity is fixed at creation time. Each message slot can
-/// hold up to the maximum message size specified during creation.
+/// The queue capacity is fixed at creation time. Each message slot stores
+/// exactly `message_size` bytes; posted slices and receive buffers must
+/// match this size.  Sending a shorter or longer slice, or receiving into
+/// a smaller or larger buffer, returns [`Error::InvalidMessageSize`].
 ///
 /// # Thread Safety
 ///
@@ -96,17 +98,17 @@ use crate::utils::Result;
 /// ```ignore
 /// use osal_rs::os::Queue;
 /// 
-/// // Create queue: 10 slots, 32 bytes per message
-/// let queue = Queue::new(10, 32).unwrap();
+/// // Create queue: 10 slots, 4 bytes per message
+/// let queue = Queue::new(10, 4).unwrap();
 /// 
 /// // Producer sends data
 /// let data = [1, 2, 3, 4];
 /// queue.post(&data, 100).unwrap();
 /// 
 /// // Consumer receives data
-/// let mut buffer = [0u8; 32];
+/// let mut buffer = [0u8; 4];
 /// queue.fetch(&mut buffer, 100).unwrap();
-/// assert_eq!(&buffer[..4], &[1, 2, 3, 4]);
+/// assert_eq!(buffer, [1, 2, 3, 4]);
 /// ```
 pub trait Queue {
     /// Fetches a message from the queue (blocking).
