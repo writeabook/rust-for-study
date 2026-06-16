@@ -80,6 +80,13 @@ fn test_run_all_tests_thread_linux() {
     crate::linux::thread_tests::run_all_tests().unwrap();
 }
 
+mod system_tests;
+
+#[test]
+fn test_run_all_tests_system_linux() {
+    crate::linux::system_tests::run_all_tests().unwrap();
+}
+
 #[test]
 fn test_run_all_tests_api_surface() {
     crate::common::api_surface::run_all_tests().unwrap();

@@ -16,28 +16,29 @@
 //! - **Scheduler methods** (`start`, `stop`, …): documented no-ops because
 //!   Linux user space has no application-level RTOS scheduler.
 //! - **ISR methods** (`_from_isr`, `yield_from_isr`, …): documented no-ops.
-//! - **Critical sections**: documented no-ops in v0.1 (no global lock).
+//! - **Critical sections**: simulated with a process-local global recursive
+//!   lock. This does **not** disable Linux interrupts or OS scheduling; it
+//!   only provides mutual exclusion among OSAL callers inside the current
+//!   process. Nesting is supported via per-thread depth counting.
 //!
-//! # Stub Limitations (v0.1)
+//! # Mock/Stub Limitations
 //!
 //! | Method                  | Behaviour                                       |
 //! |-------------------------|-------------------------------------------------|
-//! | `get_state()`           | Always returns `ThreadState::Running`           |
-//! | `count_threads()`       | Returns `1`                                     |
-//! | `get_all_thread()`      | Returns an empty `SystemState`                  |
+//! | `get_state()`           | Delegates to the thread registry                |
+//! | `count_threads()`       | Returns the number of registered OSAL threads   |
+//! | `get_all_thread()`      | Returns a snapshot of the thread registry       |
 //! | `get_free_heap_size()`  | Returns `usize::MAX` (no heap limit)            |
-//! | `critical_section_*()`  | No-op                                           |
+//! | `critical_section_*()`  | Process-local recursive lock                    |
 //! | `suspend_all / resume`  | No-op                                           |
 //! | `start()` / `stop()`    | No-op                                           |
 //! | `yield_from_isr()` …    | No-op                                           |
-//!
-//! Future versions may use a global `Mutex<…>` for critical sections and
-//! maintain an internal thread registry for `get_all_thread()`.
 
 use alloc::vec::Vec;
-use core::ptr::null_mut;
+use core::cell::RefCell;
 use core::time::Duration;
-use std::sync::OnceLock;
+
+use std::sync::{LockResult, Mutex as StdMutex, MutexGuard as StdMutexGuard, OnceLock};
 use std::thread;
 use std::time::Instant;
 
@@ -45,7 +46,20 @@ use super::config::TICK_PERIOD_MS;
 use super::thread::{ThreadMetadata, ThreadState};
 use super::types::{BaseType, TickType, UBaseType};
 use crate::traits::{SystemFn, ToTick};
-use crate::utils::{Bytes, OsalRsBool};
+use crate::utils::OsalRsBool;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Recovers from a poisoned mutex lock.  Keeps system-level operations
+/// usable even after a panic inside a critical section.
+fn recover_lock<T>(result: LockResult<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Startup-time anchor
@@ -62,17 +76,91 @@ fn startup_instant() -> &'static Instant {
 }
 
 // ---------------------------------------------------------------------------
+// Global critical-section lock
+// ---------------------------------------------------------------------------
+
+/// Returns the global critical-section mutex, lazily initialised.
+fn global_critical_lock() -> &'static StdMutex<()> {
+    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| StdMutex::new(()))
+}
+
+/// Per-thread state for reentrant critical sections.
+struct CriticalThreadState {
+    depth: usize,
+    guard: Option<StdMutexGuard<'static, ()>>,
+}
+
+thread_local! {
+    static CRITICAL_THREAD_STATE: RefCell<CriticalThreadState> =
+        RefCell::new(CriticalThreadState {
+            depth: 0,
+            guard: None,
+        });
+}
+
+/// Acquires the global critical lock for the current thread.
+///
+/// On first entry (`depth` 0 → 1) the thread actually locks
+/// `global_critical_lock()`.  Subsequent entries only increment `depth`.
+///
+/// Returns the nesting depth **before** this entry (usable as saved
+/// interrupt status in `_from_isr` variants).
+fn enter_global_critical() -> UBaseType {
+    CRITICAL_THREAD_STATE.with(|state_cell| {
+        let mut state = state_cell.borrow_mut();
+        let previous_depth = state.depth;
+
+        if state.depth == 0 {
+            let guard = recover_lock(global_critical_lock().lock());
+            state.guard = Some(guard);
+        }
+
+        state.depth = state
+            .depth
+            .checked_add(1)
+            .expect("Linux critical section nesting depth overflow");
+
+        previous_depth as UBaseType
+    })
+}
+
+/// Releases the global critical lock for the current thread.
+///
+/// Decrements `depth`.  When `depth` reaches 0 the guard is dropped,
+/// releasing `global_critical_lock()` for other threads.
+///
+/// If called without a matching `enter`, a `debug_assert!` fires in
+/// debug builds; in release builds the call is silently ignored.
+fn exit_global_critical() {
+    CRITICAL_THREAD_STATE.with(|state_cell| {
+        let mut state = state_cell.borrow_mut();
+
+        if state.depth == 0 {
+            debug_assert!(
+                false,
+                "Linux critical section exit called without matching enter"
+            );
+            return;
+        }
+
+        state.depth -= 1;
+
+        if state.depth == 0 {
+            state.guard.take(); // drop the guard, releasing the lock
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // SystemState
 // ---------------------------------------------------------------------------
 
 /// Snapshot of system-wide thread state.
 ///
-/// Captures metadata for every thread known to the OSAL runtime at the
-/// moment of collection, together with an aggregate run-time counter.
-///
-/// In v0.1 the task list is always empty because no thread registry is
-/// maintained. This will change when the thread module is fully
-/// implemented.
+/// Captures metadata for threads currently known to the Linux OSAL
+/// runtime.  The snapshot is best-effort and reflects the registry
+/// state at collection time.
 ///
 /// # Examples
 ///
@@ -84,7 +172,7 @@ fn startup_instant() -> &'static Instant {
 /// ```
 #[derive(Debug, Clone)]
 pub struct SystemState {
-    /// Metadata for each tracked thread (empty in v0.1).
+    /// Metadata for each tracked thread.
     pub tasks: Vec<ThreadMetadata>,
     /// Accumulated run-time across all threads (milliseconds).
     pub total_run_time: u32,
@@ -179,13 +267,12 @@ impl System {
 
     /// Suspends all OSAL-managed threads.
     ///
-    /// **No-op in v0.1** because the backend does not yet own a global
-    /// thread registry. Do not rely on this for mutual exclusion.
+    /// **No-op** — thread suspension is not implemented in the Linux backend.
     pub fn suspend_all() {}
 
     /// Resumes all OSAL-managed threads.
     ///
-    /// **No-op in v0.1**. Always returns `0`.
+    /// **No-op**. Always returns `0`.
     pub fn resume_all() -> BaseType {
         0
     }
@@ -319,42 +406,62 @@ impl System {
     }
 
     // ------------------------------------------------------------------
-    // Critical sections (no-ops on Linux v0.1)
+    // Critical sections (process-local recursive lock on Linux)
     // ------------------------------------------------------------------
 
     /// Enters a critical section.
     ///
-    /// **No-op in v0.1** — Linux user space cannot disable interrupts.
-    /// Do not rely on this for mutual exclusion. Use proper mutex types
-    /// instead.
-    pub fn critical_section_enter() {}
+    /// Uses a process-local recursive lock.  The same thread may nest
+    /// calls; the lock is only released when `exit` has been called the
+    /// same number of times.
+    ///
+    /// **Linux note**: This does NOT disable interrupts or OS scheduling.
+    /// It only provides mutual exclusion among OSAL callers within the
+    /// current process.
+    pub fn critical_section_enter() {
+        enter_global_critical();
+    }
 
     /// Exits a critical section.
     ///
-    /// **No-op in v0.1** — see [`critical_section_enter`](Self::critical_section_enter).
-    pub fn critical_section_exit() {}
+    /// Decrements the nesting counter.  When the counter reaches zero
+    /// the global critical lock is released, allowing other threads to
+    /// enter.
+    pub fn critical_section_exit() {
+        exit_global_critical();
+    }
 
     /// Enters a critical section at task level.
     ///
-    /// **No-op in v0.1**.
-    pub fn enter_critical() {}
+    /// Shares the same recursive lock as [`critical_section_enter`].
+    pub fn enter_critical() {
+        enter_global_critical();
+    }
 
     /// Exits a critical section at task level.
     ///
-    /// **No-op in v0.1**.
-    pub fn exit_critical() {}
+    /// Shares the same release logic as [`critical_section_exit`].
+    pub fn exit_critical() {
+        exit_global_critical();
+    }
 
     /// Enters a critical section from ISR context.
     ///
-    /// **No-op in v0.1**. Returns `0`.
+    /// Linux has no real ISR context in user space — this reuses the same
+    /// simulated critical-section lock as task-level calls.  Returns the
+    /// previous nesting depth as a saved interrupt status.
     pub fn enter_critical_from_isr() -> UBaseType {
-        0
+        enter_global_critical()
     }
 
     /// Exits a critical section from ISR context.
     ///
-    /// **No-op in v0.1**.
-    pub fn exit_critical_from_isr(_saved_interrupt_status: UBaseType) {}
+    /// `_saved_interrupt_status` is accepted for API compatibility but
+    /// not used to restore state (the recursive lock depth already
+    /// tracks this).
+    pub fn exit_critical_from_isr(_saved_interrupt_status: UBaseType) {
+        exit_global_critical();
+    }
 
     // ------------------------------------------------------------------
     // ISR support (no-ops on Linux)
@@ -376,8 +483,7 @@ impl System {
 
     /// Returns the current thread state.
     ///
-    /// Always returns [`ThreadState::Running`] in v0.1 because no
-    /// scheduler is tracking thread states.
+    /// Delegates to the OSAL thread registry.
     pub fn get_state() -> ThreadState {
         super::thread::current_thread_state()
     }
@@ -387,7 +493,8 @@ impl System {
         super::thread::count_registered_threads()
     }
 
-    /// Returns a snapshot of all threads registered in the OSAL registry.
+    /// Returns a snapshot of all threads registered in the OSAL thread
+    /// registry.
     pub fn get_all_thread() -> SystemState {
         let tasks = super::thread::snapshot_registered_threads();
         SystemState { tasks, total_run_time: 1 }
@@ -489,5 +596,29 @@ impl SystemFn for System {
 
     fn get_free_heap_size() -> usize {
         Self::get_free_heap_size()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal poison-recovery test
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    /// After the global critical lock is poisoned, subsequent
+    /// enter/exit calls should still work without panicking.
+    #[test]
+    fn critical_lock_recovers_from_poison() {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = global_critical_lock().lock().unwrap();
+            panic!("poison critical lock");
+        }));
+
+        // These must not panic after poison recovery.
+        System::enter_critical();
+        System::exit_critical();
     }
 }
