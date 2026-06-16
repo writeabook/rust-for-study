@@ -178,6 +178,14 @@ pub enum Error<'a> {
     InvalidTimerPeriod,
     /// Timer worker thread could not be created
     TimerWorkerCreationFailed,
+    /// Thread has already been started and cannot be spawned again
+    ThreadAlreadyStarted,
+    /// Thread has not been started yet
+    ThreadNotStarted,
+    /// Thread has already been joined
+    ThreadAlreadyJoined,
+    /// Thread join failed (callback panicked)
+    ThreadJoinFailed,
     /// Null pointer encountered
     NullPtr,
     /// Requested item not found
@@ -223,6 +231,10 @@ impl<'a> Display for Error<'a> {
             QueueClosed => write!(f, "Queue is closed"),
             InvalidTimerPeriod => write!(f, "Invalid timer period"),
             TimerWorkerCreationFailed => write!(f, "Timer worker creation failed"),
+            ThreadAlreadyStarted => write!(f, "Thread has already been started"),
+            ThreadNotStarted => write!(f, "Thread has not been started"),
+            ThreadAlreadyJoined => write!(f, "Thread has already been joined"),
+            ThreadJoinFailed => write!(f, "Thread join failed (callback panicked)"),
             NullPtr => write!(f, "Null pointer encountered"),
             NotFound => write!(f, "Item not found"),
             OutOfIndex => write!(f, "Index out of bounds"),

@@ -379,36 +379,18 @@ impl System {
     /// Always returns [`ThreadState::Running`] in v0.1 because no
     /// scheduler is tracking thread states.
     pub fn get_state() -> ThreadState {
-        ThreadState::Running
+        super::thread::current_thread_state()
     }
 
-    /// Returns the number of OSAL threads.
-    ///
-    /// Always returns `1` in v0.1. Will be updated when the thread
-    /// module maintains a registry.
+    /// Returns the number of live threads in the OSAL thread registry.
     pub fn count_threads() -> usize {
-        1
+        super::thread::count_registered_threads()
     }
 
-    /// Returns a snapshot of all OSAL threads.
-    ///
-    /// Returns an empty [`SystemState`] in v0.1.
+    /// Returns a snapshot of all threads registered in the OSAL registry.
     pub fn get_all_thread() -> SystemState {
-        SystemState {
-            tasks: alloc::vec![ThreadMetadata {
-                thread: 1 as *const core::ffi::c_void,
-                name: Bytes::from_str("main"),
-                stack_depth: 0,
-                priority: 1,
-                thread_number: 0,
-                state: ThreadState::Running,
-                current_priority: 1,
-                base_priority: 1,
-                run_time_counter: 0,
-                stack_high_water_mark: 0,
-            }],
-            total_run_time: 1,
-        }
+        let tasks = super::thread::snapshot_registered_threads();
+        SystemState { tasks, total_run_time: 1 }
     }
 
     /// Returns the amount of free heap memory.
