@@ -106,6 +106,9 @@ thread_local! {
 ///
 /// Returns the nesting depth **before** this entry (usable as saved
 /// interrupt status in `_from_isr` variants).
+///
+/// In the Linux backend this may block like the task-level simulated
+/// critical section; it is not intended to model a real hardware ISR.
 fn enter_global_critical() -> UBaseType {
     CRITICAL_THREAD_STATE.with(|state_cell| {
         let mut state = state_cell.borrow_mut();

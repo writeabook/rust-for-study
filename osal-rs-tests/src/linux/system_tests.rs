@@ -5,7 +5,7 @@
 //! mutual exclusion, reentrancy, API alias sharing, and ISR-path
 //! lock reuse.
 
-use osal_rs::os::{System, SystemFn};
+use osal_rs::os::System;
 use osal_rs::utils::Result;
 
 /// Entry-point called from `mod.rs` to run all Linux-specific
