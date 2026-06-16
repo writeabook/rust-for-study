@@ -48,8 +48,15 @@ fn test_run_all_tests_thread() {
 }
 
 #[test]
-fn test_run_all_tests_timer() {
+fn test_run_all_tests_timer_common() {
     crate::common::timer_tests::run_all_tests().unwrap();
+}
+
+mod timer_tests;
+
+#[test]
+fn test_run_all_tests_timer_linux() {
+    crate::linux::timer_tests::run_all_tests().unwrap();
 }
 
 #[test]

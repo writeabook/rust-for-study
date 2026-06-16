@@ -174,6 +174,10 @@ pub enum Error<'a> {
     InvalidMessageSize,
     /// Queue is closed and cannot accept new operations
     QueueClosed,
+    /// Invalid timer period (period must be > 0)
+    InvalidTimerPeriod,
+    /// Timer worker thread could not be created
+    TimerWorkerCreationFailed,
     /// Null pointer encountered
     NullPtr,
     /// Requested item not found
@@ -217,6 +221,8 @@ impl<'a> Display for Error<'a> {
             InvalidQueueSize => write!(f, "Invalid queue size"),
             InvalidMessageSize => write!(f, "Invalid queue message size"),
             QueueClosed => write!(f, "Queue is closed"),
+            InvalidTimerPeriod => write!(f, "Invalid timer period"),
+            TimerWorkerCreationFailed => write!(f, "Timer worker creation failed"),
             NullPtr => write!(f, "Null pointer encountered"),
             NotFound => write!(f, "Item not found"),
             OutOfIndex => write!(f, "Index out of bounds"),
