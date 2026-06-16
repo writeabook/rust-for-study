@@ -59,6 +59,13 @@ fn test_run_all_tests_timer_linux() {
     crate::linux::timer_tests::run_all_tests().unwrap();
 }
 
+mod semaphore_tests;
+
+#[test]
+fn test_run_all_tests_semaphore_linux() {
+    crate::linux::semaphore_tests::run_all_tests().unwrap();
+}
+
 mod thread_tests;
 
 #[test]
