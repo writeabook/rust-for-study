@@ -16,13 +16,17 @@
 //!
 //! # Portability
 //!
-//! The demo uses only `osal_rs::os::*` and avoids Linux-specific APIs
-//! (`queue.close()`, `thread.join()` in core logic).  It can be compiled
-//! for either the Linux or FreeRTOS backend by toggling the feature flag.
-//! The few platform-specific bits (e.g. thread join on Linux) are guarded
-//! with `#[cfg(feature = "linux")]`.
+//! The demo separates the **portable core** (task logic, resource creation,
+//! synchronisation primitives) from the **platform runner** (entry point,
+//! cleanup).  The core uses only `osal_rs::os::*`; no Linux-specific or
+//! FreeRTOS-specific APIs appear in the business logic.
 //!
-//! # Build & Run
+//! - **Linux runner** (`main` with `cfg(feature = "linux")`): calls
+//!   `demo_startup()`, waits for `DONE_BIT`, joins threads, exits.
+//! - **FreeRTOS runner** (`freertos_demo_entry` with `cfg(feature = "freertos")`):
+//!   calls `demo_startup()`, then `System::start()`.
+//!
+//! # Build & Run (Linux)
 //!
 //! ```bash
 //! cargo run --example portable_osal_integration_demo \
@@ -36,7 +40,7 @@ use core::time::Duration;
 use alloc::sync::Arc;
 
 use osal_rs::os::*;
-use osal_rs::os::types::{EventBits, TickType, UBaseType};
+use osal_rs::os::types::{EventBits, StackType, TickType, UBaseType};
 use osal_rs::utils::Result;
 
 // ---------------------------------------------------------------------------
@@ -57,6 +61,7 @@ const DEMO_FIRST_PHASE_TICKS: TickType = 2000;
 const DEMO_SECOND_PHASE_TICKS: TickType = 3000;
 const MONITOR_WAIT_TICKS: TickType = 2000;
 const TIMER_PERIOD_TICKS: TickType = 1000;
+const STACK_SIZE: StackType = 1024;
 
 // ---------------------------------------------------------------------------
 // Event / notification bits
@@ -67,6 +72,16 @@ const STOP_BIT: EventBits = 1 << 1;
 const ERROR_BIT: EventBits = 1 << 2;
 const DONE_BIT: EventBits = 1 << 3;
 const TIMER_TICK_BIT: u32 = 1 << 0;
+
+// ---------------------------------------------------------------------------
+// Portable log macro
+// ---------------------------------------------------------------------------
+
+macro_rules! demo_log {
+    ($($arg:tt)*) => {
+        osal_rs::println!($($arg)*)
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Packet helpers  (16-byte fixed-length message)
@@ -94,6 +109,7 @@ fn verify_packet(buf: &[u8; PACKET_SIZE]) -> bool {
 // Shared statistics
 // ---------------------------------------------------------------------------
 
+#[derive(Default)]
 struct Stats {
     produced: u32,
     consumed: u32,
@@ -103,7 +119,7 @@ struct Stats {
 }
 
 // ---------------------------------------------------------------------------
-// Resource bundle passed to every task function
+// Resource bundle (portable — shared via Arc)
 // ---------------------------------------------------------------------------
 
 struct DemoResources {
@@ -111,6 +127,22 @@ struct DemoResources {
     stats: Arc<Mutex<Stats>>,
     ready_sem: Arc<Semaphore>,
     events: Arc<EventGroup>,
+}
+
+// ---------------------------------------------------------------------------
+// DemoApp — handles returned to the platform runner
+// ---------------------------------------------------------------------------
+
+pub struct DemoApp {
+    pub resources: Arc<DemoResources>,
+    pub producer0: Thread,
+    pub producer1: Thread,
+    pub consumer0: Thread,
+    pub consumer1: Thread,
+    pub consumer2: Thread,
+    pub monitor: Thread,
+    pub supervisor: Thread,
+    pub heartbeat: Arc<Timer>,
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +188,7 @@ fn producer_task(id: u32, res: Arc<DemoResources>) {
 // Consumer task
 // ---------------------------------------------------------------------------
 
-fn consumer_task(id: u32, res: Arc<DemoResources>) {
+fn consumer_task(res: Arc<DemoResources>) {
     res.ready_sem.signal();
 
     if res.events.wait(START_BIT | STOP_BIT, TickType::MAX) & STOP_BIT != 0 {
@@ -203,7 +235,6 @@ fn monitor_task(res: Arc<DemoResources>) {
         return;
     }
 
-    // Get our own thread handle to wait for notifications.
     let current = Thread::get_current();
 
     loop {
@@ -219,14 +250,11 @@ fn monitor_task(res: Arc<DemoResources>) {
             let s = res.stats.lock().unwrap();
 
             System::enter_critical();
-            println!(
+            demo_log!(
                 "[monitor] tick={:5} produced={} consumed={} dropped={} timeout={} checksum_error={}",
                 System::get_tick_count(),
-                s.produced,
-                s.consumed,
-                s.dropped,
-                s.queue_timeout,
-                s.checksum_error,
+                s.produced, s.consumed, s.dropped,
+                s.queue_timeout, s.checksum_error,
             );
             System::exit_critical();
         }
@@ -234,7 +262,7 @@ fn monitor_task(res: Arc<DemoResources>) {
 }
 
 // ---------------------------------------------------------------------------
-// Timer callback
+// Timer callback  — only notifies the Monitor, never blocks
 // ---------------------------------------------------------------------------
 
 fn timer_callback(_timer: Box<dyn TimerFn>, param: Option<TimerParam>) -> Result<TimerParam> {
@@ -244,40 +272,37 @@ fn timer_callback(_timer: Box<dyn TimerFn>, param: Option<TimerParam>) -> Result
         }
         Ok(p)
     } else {
-        Ok(alloc::sync::Arc::new(()))
+        Ok(Arc::new(()))
     }
 }
 
 // ---------------------------------------------------------------------------
-// Supervisor task  — lifecycle controller
+// Supervisor task  — lifecycle controller (now a real OSAL Thread)
 // ---------------------------------------------------------------------------
 
-fn supervisor_task(
-    res: Arc<DemoResources>,
-    heartbeat: Arc<Timer>,
-    spawned: Vec<Thread>,
-) {
+fn supervisor_task(res: Arc<DemoResources>, heartbeat: Arc<Timer>) {
     // Phase 0 — wait for all tasks to signal ready.
     for _ in 0..TOTAL_READY_TASKS {
         res.ready_sem.wait(TickType::MAX);
     }
-    println!("[supervisor] all tasks ready, set START_BIT");
+
+    demo_log!("[supervisor] all tasks ready, set START_BIT");
 
     res.events.set(START_BIT);
     heartbeat.start(0);
 
-    // Phase 1 — default timer period (1 000 ms).
+    // Phase 1 — default timer period.
     System::delay(DEMO_FIRST_PHASE_TICKS);
 
     // Change period mid-demo.
     heartbeat.change_period(TIMER_PERIOD_TICKS / 2, 0);
     heartbeat.reset(0);
 
-    // Phase 2 — faster timer period (500 ms).
+    // Phase 2 — faster timer period.
     System::delay(DEMO_SECOND_PHASE_TICKS);
 
     // Phase 3 — graceful shutdown.
-    println!("[supervisor] set STOP_BIT");
+    demo_log!("[supervisor] set STOP_BIT");
     res.events.set(STOP_BIT);
 
     heartbeat.stop(0);
@@ -285,55 +310,113 @@ fn supervisor_task(
     // Print final summary.
     {
         let s = res.stats.lock().unwrap();
-        println!("[summary] produced={} consumed={} dropped={} timeout={} checksum_error={}",
+        demo_log!("[summary] produced={} consumed={} dropped={} timeout={} checksum_error={}",
             s.produced, s.consumed, s.dropped, s.queue_timeout, s.checksum_error);
-        println!("[summary] demo finished");
+        demo_log!("[summary] demo finished");
     }
 
     res.events.set(DONE_BIT);
-
-    // Linux: join all OS threads for a clean process exit.
-    #[cfg(feature = "linux")]
-    {
-        for h in &spawned {
-            let _ = h.join(core::ptr::null_mut());
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
-// main — resource creation, task spawning, then hand-off to Supervisor
+// Spawn helpers
 // ---------------------------------------------------------------------------
 
-fn main() {
-    println!("[init] Portable OSAL Integration Demo (linux backend)");
+fn spawn_producer(id: u32, res: Arc<DemoResources>) -> Result<Thread> {
+    let r = Arc::clone(&res);
+    let mut t = Thread::new(&alloc::format!("prod-{}", id), STACK_SIZE, 3);
+    let r2 = Arc::clone(&r);
+    let spawned = t.spawn_simple(move || {
+        let r3 = Arc::clone(&r2);
+        producer_task(id, r3)
+    })?;
+    Ok(spawned)
+}
+
+fn spawn_consumer(id: u32, res: Arc<DemoResources>) -> Result<Thread> {
+    let r = Arc::clone(&res);
+    let mut t = Thread::new(&alloc::format!("cons-{}", id), STACK_SIZE, 3);
+    let r2 = Arc::clone(&r);
+    let spawned = t.spawn_simple(move || {
+        let r3 = Arc::clone(&r2);
+        consumer_task(r3)
+    })?;
+    Ok(spawned)
+}
+
+fn spawn_monitor(res: Arc<DemoResources>) -> Result<Thread> {
+    let r = Arc::clone(&res);
+    let mut t = Thread::new("monitor", STACK_SIZE * 2, 2);
+    let r2 = Arc::clone(&r);
+    let spawned = t.spawn_simple(move || {
+        let r3 = Arc::clone(&r2);
+        monitor_task(r3)
+    })?;
+    Ok(spawned)
+}
+
+fn spawn_supervisor(res: Arc<DemoResources>, heartbeat: Arc<Timer>) -> Result<Thread> {
+    let r = Arc::clone(&res);
+    let h = Arc::clone(&heartbeat);
+    let mut t = Thread::new("supervisor", STACK_SIZE, 1);
+    let spawned = t.spawn_simple(move || {
+        let r3 = Arc::clone(&r);
+        let h3 = Arc::clone(&h);
+        supervisor_task(r3, h3)
+    })?;
+    Ok(spawned)
+}
+
+// ---------------------------------------------------------------------------
+// Timer creation
+// ---------------------------------------------------------------------------
+
+fn create_heartbeat_timer(monitor: &Thread) -> Result<Arc<Timer>> {
+    let monitor_handle = monitor.clone();
+    let timer_param: TimerParam = Arc::new(monitor_handle);
+
+    let timer = Timer::new_with_to_tick(
+        "heartbeat",
+        Duration::from_millis(TIMER_PERIOD_TICKS as u64),
+        true, // auto-reload
+        Some(timer_param),
+        timer_callback,
+    )?;
+
+    Ok(Arc::new(timer))
+}
+
+// ---------------------------------------------------------------------------
+// Portable startup — called by both Linux and FreeRTOS runners
+// ---------------------------------------------------------------------------
+
+pub fn demo_startup() -> Result<DemoApp> {
+    demo_log!("[init] Portable OSAL Integration Demo");
 
     // — 1. Create OSAL resources --------------------------------------------
 
     let queue = Arc::new(
         Queue::new(QUEUE_CAPACITY as UBaseType, PACKET_SIZE as UBaseType)
-            .expect("create queue"),
+            .map_err(|_| osal_rs::utils::Error::OutOfMemory)?,
     );
-    println!("[init] queue capacity={} message_size={}", QUEUE_CAPACITY, PACKET_SIZE);
+    demo_log!("[init] queue capacity={} message_size={}", QUEUE_CAPACITY, PACKET_SIZE);
 
-    let stats = Arc::new(Mutex::new(Stats {
-        produced: 0,
-        consumed: 0,
-        dropped: 0,
-        checksum_error: 0,
-        queue_timeout: 0,
-    }));
-    println!("[init] stats mutex");
+    let stats = Arc::new(Mutex::new(Stats::default()));
+    demo_log!("[init] stats mutex");
 
     let ready_sem = Arc::new(
-        Semaphore::new(TOTAL_READY_TASKS, 0).expect("create ready sem"),
+        Semaphore::new(TOTAL_READY_TASKS, 0)
+            .map_err(|_| osal_rs::utils::Error::OutOfMemory)?,
     );
-    println!("[init] ready semaphore max_count={}", TOTAL_READY_TASKS);
+    demo_log!("[init] ready semaphore max_count={}", TOTAL_READY_TASKS);
 
-    let events = Arc::new(EventGroup::new().expect("create event group"));
-    println!("[init] event group");
+    let events = Arc::new(
+        EventGroup::new()
+            .map_err(|_| osal_rs::utils::Error::OutOfMemory)?,
+    );
+    demo_log!("[init] event group");
 
-    let res = Arc::new(DemoResources {
+    let resources = Arc::new(DemoResources {
         queue,
         stats,
         ready_sem,
@@ -342,71 +425,83 @@ fn main() {
 
     // — 2. Spawn workers ----------------------------------------------------
 
-    let mut spawned: Vec<Thread> = Vec::new();
+    let producer0 = spawn_producer(0, Arc::clone(&resources))?;
+    demo_log!("[init] producer-0 spawned");
+    let producer1 = spawn_producer(1, Arc::clone(&resources))?;
+    demo_log!("[init] producer-1 spawned");
 
-    // Producers
-    for id in 0..PRODUCER_COUNT {
-        let r = Arc::clone(&res);
-        let mut t = Thread::new(&alloc::format!("prod-{}", id), 1024, 3);
-        let r2 = Arc::clone(&r);
-        let s = t
-            .spawn_simple(move || {
-                let r3 = Arc::clone(&r2);
-                producer_task(id, r3)
-            })
-            .expect("spawn producer");
-        println!("[init] producer-{} spawned", id);
-        spawned.push(s);
-    }
+    let consumer0 = spawn_consumer(0, Arc::clone(&resources))?;
+    demo_log!("[init] consumer-0 spawned");
+    let consumer1 = spawn_consumer(1, Arc::clone(&resources))?;
+    demo_log!("[init] consumer-1 spawned");
+    let consumer2 = spawn_consumer(2, Arc::clone(&resources))?;
+    demo_log!("[init] consumer-2 spawned");
 
-    // Consumers
-    for id in 0..CONSUMER_COUNT {
-        let r = Arc::clone(&res);
-        let mut t = Thread::new(&alloc::format!("cons-{}", id), 1024, 3);
-        let r2 = Arc::clone(&r);
-        let s = t
-            .spawn_simple(move || {
-                let r3 = Arc::clone(&r2);
-                consumer_task(id, r3)
-            })
-            .expect("spawn consumer");
-        println!("[init] consumer-{} spawned", id);
-        spawned.push(s);
-    }
-
-    // Monitor
-    let r = Arc::clone(&res);
-    let mut monitor = Thread::new("monitor", 2048, 2);
-    let r2 = Arc::clone(&r);
-    let spawned_monitor = monitor
-        .spawn_simple(move || {
-            let r3 = Arc::clone(&r2);
-            monitor_task(r3)
-        })
-        .expect("spawn monitor");
-    println!("[init] monitor spawned");
-    spawned.push(spawned_monitor.clone());
+    let monitor = spawn_monitor(Arc::clone(&resources))?;
+    demo_log!("[init] monitor spawned");
 
     // — 3. Create heartbeat timer — notifies monitor via TimerParam ----------
 
-    let timer_param: TimerParam = Arc::new(spawned_monitor);
+    let heartbeat = create_heartbeat_timer(&monitor)?;
+    demo_log!("[init] heartbeat timer period={}ms", TIMER_PERIOD_TICKS);
 
-    let heartbeat = Arc::new(
-        Timer::new_with_to_tick(
-            "heartbeat",
-            Duration::from_millis(TIMER_PERIOD_TICKS as u64),
-            true, // auto-reload
-            Some(timer_param),
-            timer_callback,
-        )
-        .expect("create timer"),
-    );
-    println!("[init] heartbeat timer period={}ms", TIMER_PERIOD_TICKS);
+    // — 4. Spawn Supervisor (OSAL Thread, not main-thread function) ----------
 
-    // — 4. Run supervisor on the main thread --------------------------------
+    let supervisor = spawn_supervisor(Arc::clone(&resources), Arc::clone(&heartbeat))?;
+    demo_log!("[init] supervisor spawned");
 
-    supervisor_task(res, heartbeat, spawned);
+    Ok(DemoApp {
+        resources,
+        producer0,
+        producer1,
+        consumer0,
+        consumer1,
+        consumer2,
+        monitor,
+        supervisor,
+        heartbeat,
+    })
+}
 
-    // Threads are joined inside supervisor_task on Linux.
-    println!("[main] demo completed successfully");
+// ===========================================================================
+// Platform runners
+// ===========================================================================
+
+/// Linux runner — calls `demo_startup()`, waits for `DONE_BIT`, joins all
+/// threads, and exits cleanly.
+#[cfg(feature = "linux")]
+fn main() -> Result<()> {
+    demo_log!("[main] run portable demo on linux backend");
+
+    let app = demo_startup()?;
+
+    // Wait for the Supervisor to signal demo completion.
+    app.resources.events.wait(DONE_BIT, TickType::MAX);
+
+    // Linux requires join() to reclaim OS thread resources.
+    app.producer0.join(core::ptr::null_mut())?;
+    app.producer1.join(core::ptr::null_mut())?;
+    app.consumer0.join(core::ptr::null_mut())?;
+    app.consumer1.join(core::ptr::null_mut())?;
+    app.consumer2.join(core::ptr::null_mut())?;
+    app.monitor.join(core::ptr::null_mut())?;
+    app.supervisor.join(core::ptr::null_mut())?;
+
+    demo_log!("[main] demo completed successfully");
+
+    Ok(())
+}
+
+/// FreeRTOS entry point — calls `demo_startup()`, then starts the
+/// scheduler.  Under FreeRTOS `System::start()` does not return.
+#[cfg(feature = "freertos")]
+pub fn freertos_demo_entry() -> Result<()> {
+    demo_log!("[main] run portable demo on freertos backend");
+
+    let _app = demo_startup()?;
+
+    // Start the FreeRTOS scheduler.  This call never returns.
+    System::start();
+
+    Ok(())
 }
