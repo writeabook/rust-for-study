@@ -102,6 +102,7 @@ osal-rs-tests/
       thread_tests.rs
       timer_tests.rs
       event_group_tests.rs
+      api_surface.rs
 
     freertos/
       mod.rs
@@ -279,6 +280,7 @@ These are the common OSAL semantics and must be strictly consistent across backe
 - System delay
 - Duration/tick conversion
 - EventGroup bit wait
+- Queue close lifecycle (operations return `Error::QueueClosed` after `close()`)
 
 ---
 
@@ -294,3 +296,6 @@ Linux is not an RTOS. We cannot force Linux to be strictly equivalent to FreeRTO
 - Task delete
 - Precise tick counts
 - ISR-safe APIs
+- Thread cooperative cancellation (`delete` sets a flag; does not force-terminate)
+- Thread join semantics (`join()` is a Linux extension, not in FreeRTOS trait)
+- Mutex<T> non-recursive behavior (same-thread double lock returns `Error::MutexLockFailed`)

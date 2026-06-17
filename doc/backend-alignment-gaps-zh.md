@@ -42,7 +42,7 @@
 |---|---|---|
 | **函数** | `System::suspend_all` → `vTaskSuspendAll` / `System::resume_all` → `xTaskResumeAll` | `System::suspend_all` / `System::resume_all` — 空函数体 |
 | **行为** | 全局暂停任务切换。 | Linux 用户空间无法原子地停止所有其他线程。 |
-| **缓解措施** | 不适用。 | 不得用于互斥（使用 `Mutex` 替代）。已文档化。 |
+| **缓解措施** | 不适用。 | 不得用于互斥（使用 `Mutex` 替代）。已文档化为无操作。 |
 
 ---
 
@@ -50,9 +50,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `System::enter_critical` / `System::critical_section_enter` → 禁用中断 | `System::enter_critical` / `System::critical_section_enter` — 空函数体 |
-| **行为** | 禁用中断到可配置的优先级级别，提供真正的原子性。 | 用户空间无法禁用中断。 |
-| **缓解措施** | 不适用。 | 不得在 Linux 测试中用于保护共享数据（使用 `Mutex` 替代）。已文档化为无操作。 |
+| **函数** | `System::enter_critical` / `System::critical_section_enter` → 禁用中断 | `System::enter_critical` / `System::critical_section_enter` → `enter_global_critical()` —— 获取进程级递归锁 |
+| **行为** | 禁用中断到可配置的优先级级别，提供真正的原子性。 | 使用全局 `StdMutex<()>`（`OnceLock` 初始化）提供进程内所有 OSAL 调用者之间的互斥。通过 `thread_local!`（`CriticalThreadState`）跟踪每线程嵌套深度，同一线程可嵌套调用。`enter_critical_from_isr()` 返回嵌套前的深度作为保存的中断状态。**此锁不禁用 Linux 中断或 OS 调度**——仅提供进程内的互斥。 |
+| **缓解措施** | 内置于内核。 | 不得依赖 Linux 上的真正原子性（使用 `Mutex` 替代）。模拟临界区防止 OSAL 调用者之间的数据竞争，但不提供硬实时保证。 |
 
 ---
 
@@ -80,9 +80,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `System::count_threads` → `uxTaskGetNumberOfTasks` / `System::get_all_thread` → `uxTaskGetSystemState` | `System::count_threads` 返回 `1` / `System::get_all_thread` 返回单条占位 `ThreadMetadata` 记录 |
-| **行为** | FreeRTOS 维护完整的任务列表（名称、优先级、状态、栈高水位）。 | Linux 后端返回固定占位记录（`"main"`，`Running`，优先级 1）——无动态线程注册表（v0.1）。 |
-| **缓解措施** | 内置于内核。 | 两后端现通过相同的内省测试。未来可能添加动态注册表。 |
+| **函数** | `System::count_threads` → `uxTaskGetNumberOfTasks` / `System::get_all_thread` → `uxTaskGetSystemState` | `System::count_threads` → `thread::count_registered_threads()` / `System::get_all_thread` → `snapshot_registered_threads()` 返回 `SystemState` |
+| **行为** | FreeRTOS 维护完整的任务列表（名称、优先级、状态、栈高水位）。 | Linux 维护动态 `ThreadRegistry`（`HashMap<usize, Weak<ThreadCore>>` + `HashMap<ThreadId, usize>`），由全局 `OnceLock<StdMutex<ThreadRegistry>>` 支持。`ensure_main_thread_registered()` 懒注册主线程。`count_threads()` 返回注册线程数。`get_all_thread()` 返回完整 `SystemState` 快照。`get_state()` 返回当前线程的 `ThreadState`。 |
+| **缓解措施** | 内置于内核。 | 注册表现已完全功能化。两后端通过相同的内省测试。 |
 
 ---
 
@@ -110,9 +110,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` 返回 `1` |
-| **行为** | FreeRTOS 预分配固定大小的堆，`get_free_heap_size` 返回可用字节数——对象创建可能因 `OutOfMemory` 失败。 | Linux 提供虚拟内存；Rust 分配几乎永不失败。返回 `1` 以满足可移植测试中的 `> 0` 断言。 |
-| **缓解措施** | 不适用。 | `RawMutex::new` 使用 `unwrap()`。测试分配失败需额外 `#[cfg]` 端点。可在未来的版本中添加。 |
+| **函数** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` 返回 `usize::MAX` |
+| **行为** | FreeRTOS 预分配固定大小的堆，`get_free_heap_size` 返回可用字节数——对象创建可能因 `OutOfMemory` 失败。 | Linux 提供虚拟内存；Rust 分配几乎永不失败。返回 `usize::MAX`——没有 RTOS 堆限制，进程可分配至操作系统允许的上限。 |
+| **缓解措施** | 不适用。 | `RawMutex::new` 使用 `unwrap()`。测试分配失败需额外 `#[cfg]` 端点。`usize::MAX` 满足所有可移植测试中的 `> 0` 断言。 |
 
 ---
 
@@ -190,9 +190,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `Queue::delete` / `Drop` → `vQueueDelete` + 句柄置 null | `Queue::delete` / `Drop` → 设置 `closed` 标志 + `Condvar::notify_all` |
-| **行为** | FreeRTOS 释放内核队列对象并将句柄指针置 null。阻塞在队列上的任何任务被解除阻塞。 | Linux 设置 `closed` 标志并通知所有等待线程，使其以 `Error::Timeout` 解除阻塞。Rust 在 `self` 释放时回收 `StdMutex` + `Condvar` + `VecDeque` 内存。 |
-| **缓解措施** | 不适用。 | 两后端均解除阻塞等待任务并回收资源。应用代码不应依赖契约之外的删除后行为。 |
+| **函数** | `Queue::delete` / `Drop` → `vQueueDelete` + 句柄置 null | `Queue::delete` / `Drop` → `Queue::close()` 设置 `closed` 标志 + 两个 Condvar 上 `Condvar::notify_all` |
+| **行为** | FreeRTOS 释放内核队列对象并将句柄指针置 null。阻塞在队列上的任何任务被解除阻塞。 | Linux 设置 `closed` 标志并通知所有等待线程（通过两个 Condvar），使其以 `Error::QueueClosed` 解除阻塞。`close()` 是幂等的。Rust 在 `self` 释放时回收 `StdMutex` + `Condvar` + `VecDeque` 内存。 |
+| **缓解措施** | 不适用。 | 两后端均解除阻塞等待任务并回收资源。在 Linux 上，阻塞操作返回 `Error::QueueClosed` 而非 `Error::Timeout`，允许调用者区分队列关闭与超时（见 §35）。 |
 
 ---
 
@@ -212,7 +212,7 @@
 |---|---|---|
 | **函数** | `Thread::suspend` → `vTaskSuspend` / `Thread::resume` → `vTaskResume` | `Thread::suspend` / `Thread::resume` — 空函数体 |
 | **行为** | FreeRTOS 原子地挂起/恢复目标任务。挂起的任务立即停止执行。 | Linux 用户空间无法原子地挂起另一个线程。无操作。 |
-| **缓解措施** | 不适用。 | 已文档化为无操作。应用代码不应在 Linux 上依赖 `suspend`/`resume` 进行同步。
+| **缓解措施** | 不适用。 | 已文档化为无操作。应用代码不应在 Linux 上依赖 `suspend`/`resume` 进行同步。 |
 
 ---
 
@@ -222,7 +222,7 @@
 |---|---|---|
 | **函数** | `Thread::get_metadata` → `uxTaskGetStackHighWaterMark` | `Thread::get_metadata` → 直接填入 `stack_depth` |
 | **行为** | FreeRTOS 记录历史最小剩余栈空间。 | Linux 用初始 `stack_depth` 填充 `stack_high_water_mark`——无运行时跟踪。 |
-| **缓解措施** | 不适用。 | Linux 上栈溢出检测需要单独的工具（如 valgrind、ASan）。
+| **缓解措施** | 不适用。 | Linux 上栈溢出检测需要单独的工具（如 valgrind、ASan）。 |
 
 ---
 
@@ -232,7 +232,7 @@
 |---|---|---|
 | **函数** | `Thread::notify` / `Thread::wait_notification` → `xTaskNotify` / `xTaskNotifyWait` | `Thread::notify` / `Thread::wait_notification` → `StdMutex::lock` + `Condvar` |
 | **行为** | FreeRTOS 任务通知使用按优先级排序的唤醒。如果多个任务正在等待通知，最高优先级任务首先解除阻塞。 | Linux 使用 `Condvar::notify_all`——所有等待者唤醒并竞争锁。 |
-| **缓解措施** | 不适用。 | Linux 上线程优先级仅作信息用途，唤醒顺序不影响开发/测试的正确性。
+| **缓解措施** | 不适用。 | Linux 上线程优先级仅作信息用途，唤醒顺序不影响开发/测试的正确性。 |
 
 ---
 
@@ -242,7 +242,7 @@
 |---|---|---|
 | **函数** | `Thread::notify_from_isr` → `xTaskNotifyFromISR` + `System::yield_from_isr` | `Thread::notify_from_isr` → `StdMutex::try_lock` + `Condvar::notify_all` |
 | **行为** | 成功后通知调度器进行上下文切换，让更高优先级任务在 ISR 之后立即运行。 | 纯非阻塞通知，无上下文切换。 |
-| **缓解措施** | 内置于内核。 | Linux 无 ISR 上下文；`notify_from_isr` 作为非阻塞操作语义正确。
+| **缓解措施** | 内置于内核。 | Linux 无 ISR 上下文；`notify_from_isr` 作为非阻塞操作语义正确。 |
 
 ---
 
@@ -251,8 +251,8 @@
 | | FreeRTOS | Linux |
 |---|---|---|
 | **函数** | `Timer::new` → `xTimerCreate` 在定时器守护任务中注册 | `Timer::new` 为每个定时器创建专用的 `std::thread` 工作线程 |
-| **行为** | FreeRTOS 使用一个定时器服务任务处理所有定时器。回调在守护任务上下文中顺序执行。 | 每个定时器在首次 `start()` 时生成自己的操作系统线程。线程独立睡眠。 |
-| **缓解措施** | 不适用。 | 每定时器一线程模型功能上等效——回调仍按定时器顺序执行。对于深度嵌入场景，部署至 FreeRTOS 以避免每定时器的线程开销。
+| **行为** | FreeRTOS 使用一个定时器服务任务处理所有定时器。回调在守护任务上下文中顺序执行。 | 每个定时器在构造时生成自己的操作系统线程。工作线程在 `Condvar` 上等待命令或 deadline 到期，然后在内部锁之外触发回调。 |
+| **缓解措施** | 不适用。 | 每定时器一线程模型功能上等效——回调仍按定时器顺序执行。对于深度嵌入场景，部署至 FreeRTOS 以避免每定时器的线程开销。 |
 
 ---
 
@@ -260,9 +260,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | 定时器到期由内核 tick 中断触发 | 定时器到期通过 `std::thread::sleep` + 5 ms 轮询实现 |
-| **行为** | FreeRTOS 定时器在周期结束后下一个 tick 边界到期（通常 ±1 tick 抖动）。 | Linux 定时器每 5 ms 轮询一次，在距实际周期 ±5 ms 内触发。 |
-| **缓解措施** | 不适用。 | 对于开发/测试工作负载可接受。需要硬实时定时器保证时部署至 FreeRTOS。
+| **函数** | 定时器到期由内核 tick 中断触发 | 定时器到期通过 `Condvar::wait_timeout` 加精确 deadline 计算 |
+| **行为** | FreeRTOS 定时器在周期结束后下一个 tick 边界到期（通常 ±1 tick 抖动）。 | 每个定时器的工作线程使用 `Condvar::wait_timeout(deadline - now)` 等待精确的剩余时间。在 `Stopped` 状态下，工作线程在 `Condvar::wait` 上无限等待。在 `Armed` 状态下，计算到 deadline 的剩余时间。精度取决于操作系统调度粒度（通常 ±1 ms 或更好），而非固定轮询间隔。 |
+| **缓解措施** | 不适用。 | 对于开发/测试工作负载可接受。需要硬实时定时器保证时部署至 FreeRTOS。 |
 
 ---
 
@@ -272,7 +272,7 @@
 |---|---|---|
 | **函数** | `start` / `stop` / `reset` / `change_period` → 向定时器守护任务队列发送命令 | `start` / `stop` / `reset` / `change_period` → 直接修改共享状态 + 通过 `Condvar` 通知工作线程 |
 | **行为** | FreeRTOS 为定时器操作使用内部命令队列。队列满时调用者阻塞至多 `ticks_to_wait`。 | Linux 忽略 `ticks_to_wait`——所有操作均为同步，不可阻塞（无有界队列）。 |
-| **缓解措施** | `ticks_to_wait` 实现为 `_ticks_to_wait: TickType`（未使用）。 | 应用代码不应在 Linux 上依赖 `ticks_to_wait` 参数。
+| **缓解措施** | `ticks_to_wait` 实现为 `_ticks_to_wait: TickType`（未使用）。 | 应用代码不应在 Linux 上依赖 `ticks_to_wait` 参数。 |
 
 ---
 
@@ -280,9 +280,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `Timer::delete` / `Drop` → `xTimerDelete` | `Timer::delete` / `Drop` → 设置 `deleted` + `cancelled` 标志，通过 `Condvar` 通知工作线程 |
-| **行为** | FreeRTOS 异步删除定时器对象并释放内核资源。 | Linux 设置标志，工作线程在下个轮询周期退出。Drop 中不显式 join 线程（避免阻塞）。 |
-| **缓解措施** | 不适用。 | 工作线程可能在 `delete()` 返回后短暂逗留。应用代码应在进程退出前预留短暂宽限期。
+| **函数** | `Timer::delete` / `Drop` → `xTimerDelete` | `Timer::delete` / `Drop` → `shutdown()` + `worker_shutdown()` |
+| **行为** | FreeRTOS 异步删除定时器对象并释放内核资源。 | `shutdown()` 将状态设为 `Deleted`、清除 deadline、并递增 generation 计数器。`worker_shutdown()` 通过 `Condvar::notify_all` 唤醒工作线程，取走 `JoinHandle`，并在调用线程不是工作线程本身时调用 `JoinHandle::join()` 等待操作系统线程退出。`Timer` 使用 `Arc<TimerCore>` 及 `public_handles: AtomicUsize` 引用计数；`Clone` 递增计数，`Drop` 递减计数，最后一个句柄触发 `shutdown()`。 |
+| **缓解措施** | 不适用。 | 非自 join 的删除会阻塞直到工作线程退出，确保干净的资源回收。自 join（在回调内删除定时器）会释放 `JoinHandle` 而不 join，工作线程在下一次迭代时退出。 |
 
 ---
 
@@ -290,9 +290,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `Deref<Target=XxxHandle>` 为每个 OS 对象（`Thread`、`Queue`、`Semaphore`、`Mutex`、`EventGroup`、`Timer`）返回真实的 FreeRTOS 内核句柄。 | `Deref<Target=XxxHandle>` 返回虚拟的 `1 as XxxHandle` 指针——Linux 无内核句柄。 |
-| **行为** | 句柄可传递给 C FFI 函数或用于底层 FreeRTOS API 调用。 | 虚拟指针满足 API 表面契约（`&obj as &XxxHandle`），但绝对不能解引用——它指向地址 `0x1`。 |
-| **缓解措施** | 不适用。 | 这纯粹是编译期 API 兼容层。应用代码不应在 Linux 上依赖句柄值。 |
+| **函数** | `Deref<Target=XxxHandle>` 为每个 OS 对象（`Thread`、`Queue`、`Semaphore`、`Mutex`、`EventGroup`、`Timer`）返回真实的 FreeRTOS 内核句柄。 | `Deref<Target=XxxHandle>` 返回单调递增的原子 ID——不是可解引用的指针 |
+| **行为** | 句柄可传递给 C FFI 函数或用于底层 FreeRTOS API 调用。 | 每个模块维护自己的 `AtomicUsize` 计数器（`NEXT_QUEUE_HANDLE`、`NEXT_SEMAPHORE_HANDLE`、`NEXT_MUTEX_HANDLE`、`NEXT_EVENT_GROUP_HANDLE`、`NEXT_TIMER_HANDLE`、`NEXT_THREAD_ID`）。每次 `new()` 时，`fetch_add` 生成唯一 ID 并转换为 `XxxHandle = *const c_void`。该值**不是**有效指针——仅作为不透明唯一标识符用于比较和诊断。 |
+| **缓解措施** | 不适用。 | 这纯粹是编译期 API 兼容层。应用代码绝对不能在 Linux 上解引用句柄值。 |
 
 ---
 
@@ -300,6 +300,66 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **函数** | `Thread::new_with_handle`、`new_with_to_priority`、`new_with_handle_and_to_priority`、`get_metadata_from_handle`、`get_metadata`、`wait_notification_with_to_tick` | 相同签名——桩/委托实现 |
-| **行为** | `new_with_handle` 包装已有的 FreeRTOS 任务句柄。`get_metadata_from_handle` 通过 `vTaskGetInfo` 查询内核。 | `new_with_handle` 创建新的 Linux `Thread`（忽略句柄）。`get_metadata_from_handle` 返回虚拟 `ThreadMetadata`，其 `state: Running`。 |
-| **缓解措施** | 不适用。 | 这些方法仅为 API 表面一致性而存在。在 Linux 上使用 `Thread::new()` + `spawn()` 创建线程。 |
+| **函数** | `Thread::new_with_handle`、`new_with_to_priority`、`new_with_handle_and_to_priority`、`get_metadata_from_handle`、`get_metadata`、`wait_notification_with_to_tick` | 相同签名——通过 `ThreadRegistry` 完整实现 |
+| **行为** | `new_with_handle` 包装已有的 FreeRTOS 任务句柄。`get_metadata_from_handle` 通过 `vTaskGetInfo` 查询内核。 | `ThreadRegistry` 由全局 `OnceLock<StdMutex<ThreadRegistry>>` 支持，提供 `register_thread`、`lookup_by_handle`、`lookup_current`、`unregister_thread` 函数。`get_metadata_from_handle()` 查询注册表返回真实元数据。`get_current()` 优先查找注册表，若当前线程未注册则懒注册。`new_with_handle()` 创建新 `Thread` 并注册（忽略传入句柄，改用自增 ID）。`new_with_handle_and_to_priority()` 同理。 |
+| **缓解措施** | 不适用。 | 注册表现已完全功能化。在 Linux 上使用 `Thread::new()` + `spawn()` 创建线程。 |
+
+---
+
+## 31. Mutex — 双层架构
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | 仅 `RawMutex`（递归互斥锁，通过 `xSemaphoreTakeRecursive`/`xSemaphoreGiveRecursive` 实现）。`Mutex<T>` 在 FreeRTOS 递归互斥锁上加 RAII Guard。 | `RawMutex`（递归：`StdMutex<State>` + `Condvar` + `owner: ThreadId` + `recursion: u32`）以及 `Mutex<T>`（非递归：`Box<StdMutex<T>>` 数据锁 + `StdMutex<Option<ThreadId>>` 所有权追踪）。 |
+| **行为** | FreeRTOS 的互斥锁天然是递归的。`Mutex<T>` 在同一递归原语之上提供类型安全的 RAII。 | `RawMutex` 遵循契约（递归）。`Mutex<T>` 是**非递归**的——如果同一线程尝试锁定已持有的 `Mutex<T>`，返回 `Error::MutexLockFailed`。`Mutex<T>` 上的 `lock_from_isr` 实现为 `try_lock`（非阻塞）。 |
+| **缓解措施** | 内置于内核。 | `Mutex<T>` 的非递归行为是刻意设计，与 FreeRTOS 后端的递归行为不同。应用代码绝对不能从同一线程递归锁定同一 `Mutex<T>`。 |
+
+---
+
+## 32. Thread — 协作式取消
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Thread::delete` → `vTaskDelete` | `Thread::delete` → 设置 `delete_requested = true` + `Condvar::notify_all()` |
+| **行为** | FreeRTOS `vTaskDelete` 立即终止目标任务，释放其栈和 TCB。 | Linux 无法强制终止 `std::thread`。`delete()` 设置协作取消标志并唤醒阻塞的等待者。回调应轮询 `is_delete_requested()` 或 `is_cancellation_requested()` 并自然返回。 |
+| **缓解措施** | 内置于内核。 | 文档化为协作取消模型。长期运行的回调应定期检查取消标志。 |
+
+---
+
+## 33. Thread — join 支持
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | 无等价的 `join` API——`vTaskDelete` 后任务立即消失。 | `Thread::join(&mut retval) -> Result<i32>` —— 使用 `JoinHandle::join()` 等待操作系统线程完成。 |
+| **行为** | FreeRTOS 线程删除后无回收机制。 | Linux `join()` 阻塞直到目标线程退出，回收操作系统资源，并从注册表中注销线程。如果线程未启动返回 `Error::ThreadNotStarted`，如果已 join 返回 `Error::ThreadAlreadyJoined`。 |
+| **缓解措施** | 不适用。 | `join()` 是 Linux 后端的扩展能力，不在 FreeRTOS 后端 trait 中。 |
+
+---
+
+## 34. Thread — 通知系统
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Thread::notify` → `xTaskNotify` / `Thread::wait_notification` → `xTaskNotifyWait` | `Thread::notify` → `StdMutex<ThreadInner>` + `Condvar::notify_all()` / `Thread::wait_notification` → `Condvar::wait` / `Condvar::wait_timeout` |
+| **行为** | FreeRTOS 任务通知唤醒**最高优先级**的等待任务。 | Linux 使用 `Condvar::notify_all`——所有等待者唤醒并竞争锁。通知值（32 位）支持 `ThreadNotification` 枚举变体：`NoAction`、`SetBits`、`Increment`、`SetValueWithOverwrite`、`SetValueWithoutOverwrite`。 |
+| **缓解措施** | 内置于内核。 | 唤醒顺序不影响正确性——等待者检查条件后重新等待或返回。`SetValueWithoutOverwrite` 在已有待处理通知时返回 `Error::QueueFull`。 |
+
+---
+
+## 35. Queue — close 生命周期
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | `Queue::delete` → `vQueueDelete` | `Queue::delete` / `Queue::close` → 设置 `closed = true` + 两个 Condvar 上 `notify_all` |
+| **行为** | FreeRTOS 删除队列时解除阻塞所有等待任务，但等待任务的返回值未定义。 | Linux 在 `closed` 状态下明确使所有 `post`/`fetch` 操作返回 `Error::QueueClosed`（而非 `Error::Timeout`）。`close()` 是幂等的。`Drop` 也会调用 `close()`。 |
+| **缓解措施** | 不适用。 | `Error::QueueClosed` 是 Linux 后端特有的错误变体，FreeRTOS 后端不使用。可移植代码应同时处理 `Error::Timeout` 和 `Error::QueueClosed`。 |
+
+---
+
+## 36. Poison 恢复
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **函数** | 不适用——FreeRTOS 没有 mutex poison 概念。 | 所有 Linux 原语（`RawMutex`、`Mutex<T>`、`Queue`、`Semaphore`、`EventGroup`、`Thread`、`System` 临界区、`Timer`）使用 `recover_lock()` 从 poisoned `StdMutex` 恢复。 |
+| **行为** | 不适用。 | 如果某个线程在持有 Rust `StdMutex` 时 panic，该 mutex 变为 "poisoned"。`recover_lock()` 解包 `PoisonError` 并继续使用内部数据，保证一个线程的 panic 不会永久禁用同步原语。各模块包含 `#[cfg(test)]` 测试验证 panic 后原语仍可用。 |
+| **缓解措施** | 不适用。 | 恢复后的数据可能不一致——调用者需自行验证。FreeRTOS 没有 mutex poison，因此此行为是 Linux 特有的安全保障。 |

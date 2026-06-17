@@ -51,9 +51,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `System::enter_critical` / `System::critical_section_enter` → disables interrupts | `System::enter_critical` / `System::critical_section_enter` — empty bodies |
-| **Behavior** | Disables interrupts up to a configurable priority level, providing true atomicity. | User space cannot disable interrupts. |
-| **Mitigation** | N/A. | Must not be relied on for shared-data protection in Linux tests (use `Mutex` instead).  Documented as no-op. |
+| **Function** | `System::enter_critical` / `System::critical_section_enter` → disables interrupts | `System::enter_critical` / `System::critical_section_enter` → `enter_global_critical()` — acquires a process-local recursive lock |
+| **Behavior** | Disables interrupts up to a configurable priority level, providing true atomicity. | A global `StdMutex<()>` (`OnceLock`-initialized) provides mutual exclusion among all OSAL callers within the process. Per-thread nesting depth is tracked via `thread_local!` (`CriticalThreadState`), so the same thread may nest calls. `enter_critical_from_isr()` returns the previous nesting depth as a saved interrupt status. **This does NOT disable Linux interrupts or OS scheduling** — it only provides mutual exclusion within the process. |
+| **Mitigation** | Built into the kernel. | Must not be relied on for real atomicity on Linux (use `Mutex` instead).  The simulated critical section prevents data races among OSAL callers but offers no hard-real-time guarantees. |
 
 ---
 
@@ -81,9 +81,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `System::count_threads` → `uxTaskGetNumberOfTasks` / `System::get_all_thread` → `uxTaskGetSystemState` | `System::count_threads` returns `1` / `System::get_all_thread` returns a single placeholder `ThreadMetadata` record |
-| **Behavior** | FreeRTOS maintains a complete task list (name, priority, state, stack high-water mark). | The Linux backend returns a fixed placeholder record (`"main"`, `Running`, priority 1) — no dynamic thread registry is maintained (v0.1). |
-| **Mitigation** | Built into the kernel. | Both backends now pass the same introspection tests. A dynamic registry may be added in a future release. |
+| **Function** | `System::count_threads` → `uxTaskGetNumberOfTasks` / `System::get_all_thread` → `uxTaskGetSystemState` | `System::count_threads` → `thread::count_registered_threads()` / `System::get_all_thread` → `snapshot_registered_threads()` returning `SystemState` |
+| **Behavior** | FreeRTOS maintains a complete task list (name, priority, state, stack high-water mark). | Linux maintains a dynamic `ThreadRegistry` (`HashMap<usize, Weak<ThreadCore>>` + `HashMap<ThreadId, usize>`) backed by a global `OnceLock<StdMutex<ThreadRegistry>>`. `ensure_main_thread_registered()` lazily registers the main thread. `count_threads()` returns the number of registered threads. `get_all_thread()` returns a complete `SystemState` snapshot. `get_state()` returns the current thread's `ThreadState`. |
+| **Mitigation** | Built into the kernel. | The registry is now fully functional. Both backends pass the same introspection tests. |
 
 ---
 
@@ -111,9 +111,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` returns `1` |
-| **Behavior** | FreeRTOS pre-allocates a fixed-size heap; `get_free_heap_size` reports remaining bytes — object creation can fail with `OutOfMemory`. | Linux provides virtual memory; Rust allocations almost never fail. Returns `1` to satisfy `> 0` assertions in portable tests. |
-| **Mitigation** | N/A. | `RawMutex::new` uses `unwrap()`. Testing allocation failure would require additional `#[cfg]` endpoints. Can be added in a future release. |
+| **Function** | `get_free_heap_size` → `xPortGetFreeHeapSize` | `System::get_free_heap_size` returns `usize::MAX` |
+| **Behavior** | FreeRTOS pre-allocates a fixed-size heap; `get_free_heap_size` reports remaining bytes — object creation can fail with `OutOfMemory`. | Linux provides virtual memory; Rust allocations almost never fail. Returns `usize::MAX` — there is no RTOS heap, and the process can allocate as much as the OS permits. |
+| **Mitigation** | N/A. | `RawMutex::new` uses `unwrap()`. Testing allocation failure would require additional `#[cfg]` endpoints. `usize::MAX` satisfies all `> 0` assertions in portable tests. |
 
 ---
 
@@ -191,9 +191,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `Queue::delete` / `Drop` → `vQueueDelete` + set handle to null | `Queue::delete` / `Drop` → set `closed` flag + `Condvar::notify_all` |
-| **Behavior** | FreeRTOS frees the kernel queue object and sets the handle pointer to null.  Any task blocked on the queue is unblocked. | Linux sets a `closed` flag and notifies all waiting threads so they unblock with `Error::Timeout`.  Rust reclaims the `StdMutex` + `Condvar` + `VecDeque` memory when `self` is dropped. |
-| **Mitigation** | N/A. | Both backends unblock waiting tasks and reclaim resources.  Application code should not rely on post-deletion behavior beyond the contract. |
+| **Function** | `Queue::delete` / `Drop` → `vQueueDelete` + set handle to null | `Queue::delete` / `Drop` → `Queue::close()` which sets `closed` flag + `Condvar::notify_all` on both Condvars |
+| **Behavior** | FreeRTOS frees the kernel queue object and sets the handle pointer to null.  Any task blocked on the queue is unblocked. | Linux sets a `closed` flag and notifies all waiting threads via both Condvars so they unblock with `Error::QueueClosed`.  `close()` is idempotent.  Rust reclaims the `StdMutex` + `Condvar` + `VecDeque` memory when `self` is dropped. |
+| **Mitigation** | N/A. | Both backends unblock waiting tasks and reclaim resources.  On Linux, blocking operations return `Error::QueueClosed` instead of `Error::Timeout`, allowing callers to distinguish queue closure from time-outs (see §35). |
 
 ---
 
@@ -213,7 +213,7 @@
 |---|---|---|
 | **Function** | `Thread::suspend` → `vTaskSuspend` / `Thread::resume` → `vTaskResume` | `Thread::suspend` / `Thread::resume` — empty bodies |
 | **Behavior** | FreeRTOS atomically suspends/resumes the target task. The suspended task stops executing immediately. | Linux user space cannot atomically suspend another thread. No-op. |
-| **Mitigation** | N/A. | Documented no-op. Application code should not rely on `suspend`/`resume` for synchronization on Linux.
+| **Mitigation** | N/A. | Documented no-op. Application code should not rely on `suspend`/`resume` for synchronization on Linux. |
 
 ---
 
@@ -223,7 +223,7 @@
 |---|---|---|
 | **Function** | `Thread::get_metadata` → `uxTaskGetStackHighWaterMark` | `Thread::get_metadata` → fills `stack_depth` as-is |
 | **Behavior** | FreeRTOS tracks the minimum remaining stack space ever recorded. | Linux fills `stack_high_water_mark` with the initial `stack_depth` — no runtime tracking. |
-| **Mitigation** | N/A. | Stack overflow detection requires separate tooling (e.g., valgrind, ASan) on Linux.
+| **Mitigation** | N/A. | Stack overflow detection requires separate tooling (e.g., valgrind, ASan) on Linux. |
 
 ---
 
@@ -233,7 +233,7 @@
 |---|---|---|
 | **Function** | `Thread::notify` / `Thread::wait_notification` → `xTaskNotify` / `xTaskNotifyWait` | `Thread::notify` / `Thread::wait_notification` → `StdMutex::lock` + `Condvar` |
 | **Behavior** | FreeRTOS task notifications use priority-ordered wake-up. If multiple tasks are waiting on notifications, the highest-priority task is unblocked first. | Linux uses `Condvar::notify_all` — all waiters wake and compete for the lock. |
-| **Mitigation** | N/A. | Wake order does not impact correctness for development/test workloads on Linux — thread priorities are informational only.
+| **Mitigation** | N/A. | Wake order does not impact correctness for development/test workloads on Linux — thread priorities are informational only. |
 
 ---
 
@@ -243,7 +243,7 @@
 |---|---|---|
 | **Function** | `Thread::notify_from_isr` → `xTaskNotifyFromISR` + `System::yield_from_isr` | `Thread::notify_from_isr` → `StdMutex::try_lock` + `Condvar::notify_all` |
 | **Behavior** | On success, signals the scheduler to perform a context switch so a higher-priority task runs immediately after the ISR. | Pure non-blocking notification with no context switch. |
-| **Mitigation** | Built into the kernel. | Linux has no ISR context; `notify_from_isr` is semantically correct as a non-blocking operation.
+| **Mitigation** | Built into the kernel. | Linux has no ISR context; `notify_from_isr` is semantically correct as a non-blocking operation. |
 
 ---
 
@@ -252,8 +252,8 @@
 | | FreeRTOS | Linux |
 |---|---|---|
 | **Function** | `Timer::new` → `xTimerCreate` registers with the timer daemon task | `Timer::new` creates a dedicated worker `std::thread` per timer |
-| **Behavior** | FreeRTOS uses a single timer service task that processes all timers from a command queue. Callbacks run sequentially in the daemon context. | Each timer spawns its own OS thread on first `start()`. Threads sleep independently. |
-| **Mitigation** | N/A. | The per-timer thread model is functionally equivalent — callbacks still run sequentially per timer. For deeply embedded use cases, deploy to FreeRTOS to avoid per-timer thread overhead.
+| **Behavior** | FreeRTOS uses a single timer service task that processes all timers from a command queue. Callbacks run sequentially in the daemon context. | Each timer spawns its own OS thread at construction time. The worker blocks on a `Condvar` waiting for commands or deadline expiry, then fires the callback outside the internal lock. |
+| **Mitigation** | N/A. | The per-timer thread model is functionally equivalent — callbacks still run sequentially per timer. For deeply embedded use cases, deploy to FreeRTOS to avoid per-timer thread overhead. |
 
 ---
 
@@ -261,9 +261,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | Timer expiry triggered by the kernel tick interrupt | Timer expiry via `std::thread::sleep` with 5 ms polling |
-| **Behavior** | FreeRTOS timers expire at the next tick boundary after the period elapses (typically ±1 tick jitter). | Linux timers poll every 5 ms and fire within ±5 ms of the actual period. |
-| **Mitigation** | N/A. | Acceptable for development/test workloads. Deploy to FreeRTOS for hard real-time timer guarantees.
+| **Function** | Timer expiry triggered by the kernel tick interrupt | Timer expiry via `Condvar::wait_timeout` with precise deadline calculation |
+| **Behavior** | FreeRTOS timers expire at the next tick boundary after the period elapses (typically ±1 tick jitter). | Each timer's worker thread uses `Condvar::wait_timeout(deadline - now)` to wait for the exact remaining time. In the `Stopped` state, the worker blocks indefinitely on `Condvar::wait`. In the `Armed` state, it computes the remaining time to the deadline. Precision depends on OS scheduling granularity (typically ±1 ms or better), not a fixed polling interval. |
+| **Mitigation** | N/A. | Acceptable for development/test workloads. Deploy to FreeRTOS for hard real-time timer guarantees. |
 
 ---
 
@@ -273,7 +273,7 @@
 |---|---|---|
 | **Function** | `start` / `stop` / `reset` / `change_period` → send command to timer daemon queue | `start` / `stop` / `reset` / `change_period` → directly mutate shared state + notify worker via `Condvar` |
 | **Behavior** | FreeRTOS uses an internal command queue for timer operations. If the queue is full, the caller blocks up to `ticks_to_wait`. | Linux ignores `ticks_to_wait` — all operations are synchronous and cannot block (no bounded queue). |
-| **Mitigation** | `ticks_to_wait` is implemented as `_ticks_to_wait: TickType` (unused). | Application code should not rely on `ticks_to_wait` for timer API calls on Linux.
+| **Mitigation** | `ticks_to_wait` is implemented as `_ticks_to_wait: TickType` (unused). | Application code should not rely on `ticks_to_wait` for timer API calls on Linux. |
 
 ---
 
@@ -281,9 +281,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `Timer::delete` / `Drop` → `xTimerDelete` | `Timer::delete` / `Drop` → sets `deleted` + `cancelled` flags, notifies worker via `Condvar` |
-| **Behavior** | FreeRTOS asynchronously deletes the timer object and frees kernel resources. | Linux sets flags so the worker thread exits on its next poll cycle. No explicit thread join in Drop (avoids blocking). |
-| **Mitigation** | N/A. | Worker threads may linger briefly after `delete()` returns. Application code should allow a short grace period before process exit.
+| **Function** | `Timer::delete` / `Drop` → `xTimerDelete` | `Timer::delete` / `Drop` → `shutdown()` + `worker_shutdown()` |
+| **Behavior** | FreeRTOS asynchronously deletes the timer object and frees kernel resources. | `shutdown()` sets the state to `Deleted`, clears the deadline, and bumps the generation counter. `worker_shutdown()` wakes the worker via `Condvar::notify_all`, takes the `JoinHandle`, and — if the calling thread is not the worker itself — calls `JoinHandle::join()` to wait for the OS thread to exit. `Timer` uses `Arc<TimerCore>` with `public_handles: AtomicUsize` reference counting; `Clone` increments the count, `Drop` decrements it, and the last handle triggers `shutdown()`. |
+| **Mitigation** | N/A. | Non-self-join deletions block until the worker thread exits, ensuring clean resource reclamation. Self-join (deleting a timer from within its own callback) drops the `JoinHandle` without joining, and the worker exits on its next iteration. |
 
 ---
 
@@ -291,9 +291,9 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `Deref<Target=XxxHandle>` returns the real FreeRTOS kernel handle for every OS object (`Thread`, `Queue`, `Semaphore`, `Mutex`, `EventGroup`, `Timer`). | `Deref<Target=XxxHandle>` returns a dummy `1 as XxxHandle` pointer — Linux has no kernel handles. |
-| **Behavior** | The handle can be passed to C FFI functions or used for low-level FreeRTOS API calls. | The dummy pointer satisfies the API surface contract (`&obj as &XxxHandle`) but must never be dereferenced — it points to address `0x1`. |
-| **Mitigation** | N/A. | This is purely a compile-time API compatibility shim. Application code should not rely on handle values on Linux. |
+| **Function** | `Deref<Target=XxxHandle>` returns the real FreeRTOS kernel handle for every OS object (`Thread`, `Queue`, `Semaphore`, `Mutex`, `EventGroup`, `Timer`). | `Deref<Target=XxxHandle>` returns a monotonically increasing atomic ID — not a dereferenceable pointer |
+| **Behavior** | The handle can be passed to C FFI functions or used for low-level FreeRTOS API calls. | Each module maintains its own `AtomicUsize` counter (`NEXT_QUEUE_HANDLE`, `NEXT_SEMAPHORE_HANDLE`, `NEXT_MUTEX_HANDLE`, `NEXT_EVENT_GROUP_HANDLE`, `NEXT_TIMER_HANDLE`, `NEXT_THREAD_ID`). On each `new()`, `fetch_add` generates a unique ID cast to `XxxHandle = *const c_void`. The value is **not** a valid pointer — it serves as an opaque unique identifier for comparison and diagnostics only. |
+| **Mitigation** | N/A. | This is purely a compile-time API compatibility shim. Application code must not dereference handle values on Linux. |
 
 ---
 
@@ -301,6 +301,66 @@
 
 | | FreeRTOS | Linux |
 |---|---|---|
-| **Function** | `Thread::new_with_handle`, `new_with_to_priority`, `new_with_handle_and_to_priority`, `get_metadata_from_handle`, `get_metadata`, `wait_notification_with_to_tick` | Same signatures — stub / delegate implementations |
-| **Behavior** | `new_with_handle` wraps an existing FreeRTOS task handle. `get_metadata_from_handle` queries the kernel via `vTaskGetInfo`. | `new_with_handle` creates a fresh Linux `Thread` (ignoring the handle). `get_metadata_from_handle` returns a dummy `ThreadMetadata` with `state: Running`. |
-| **Mitigation** | N/A. | These methods exist for API surface parity only. Use `Thread::new()` + `spawn()` for Linux thread creation. |
+| **Function** | `Thread::new_with_handle`, `new_with_to_priority`, `new_with_handle_and_to_priority`, `get_metadata_from_handle`, `get_metadata`, `wait_notification_with_to_tick` | Same signatures — fully implemented via `ThreadRegistry` |
+| **Behavior** | `new_with_handle` wraps an existing FreeRTOS task handle. `get_metadata_from_handle` queries the kernel via `vTaskGetInfo`. | `ThreadRegistry` is backed by a global `OnceLock<StdMutex<ThreadRegistry>>` providing `register_thread`, `lookup_by_handle`, `lookup_current`, `unregister_thread`. `get_metadata_from_handle()` queries the registry and returns real metadata. `get_current()` prefers the registry; if the current thread is not registered, it lazily registers it. `new_with_handle()` creates a new `Thread` and registers it (ignoring the passed-in handle, substituting an auto-incrementing ID). `new_with_handle_and_to_priority()` follows the same pattern. |
+| **Mitigation** | N/A. | The registry is now fully functional. Use `Thread::new()` + `spawn()` for Linux thread creation. |
+
+---
+
+## 31. Mutex — Dual-Layer Architecture
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | Only `RawMutex` (recursive mutex via `xSemaphoreTakeRecursive` / `xSemaphoreGiveRecursive`). `Mutex<T>` wraps a FreeRTOS recursive mutex plus RAII guard. | `RawMutex` (recursive: `StdMutex<State>` + `Condvar` + `owner: ThreadId` + `recursion: u32`) **and** `Mutex<T>` (non-recursive: `Box<StdMutex<T>>` for data + `StdMutex<Option<ThreadId>>` for ownership tracking). |
+| **Behavior** | FreeRTOS mutexes are inherently recursive. `Mutex<T>` provides type-safe RAII on top of the same recursive primitive. | `RawMutex` follows the trait contract (recursive). `Mutex<T>` is **non-recursive** — if the same thread attempts to lock a `Mutex<T>` it already holds, it returns `Error::MutexLockFailed`. `lock_from_isr` on `Mutex<T>` is implemented as `try_lock` (non-blocking). |
+| **Mitigation** | Built into the kernel. | `Mutex<T>`'s non-recursive behavior is intentional and differs from the FreeRTOS backend's recursive behavior. Application code must not recursively lock the same `Mutex<T>` from the same thread. |
+
+---
+
+## 32. Thread — Cooperative Cancellation
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Thread::delete` → `vTaskDelete` | `Thread::delete` → sets `delete_requested = true` + `Condvar::notify_all()` |
+| **Behavior** | FreeRTOS `vTaskDelete` immediately terminates the target task, freeing its stack and TCB. | Linux cannot force-terminate a `std::thread`. `delete()` sets a cooperative cancellation flag and wakes blocked waiters. The callback should poll `is_delete_requested()` or `is_cancellation_requested()` and return naturally. |
+| **Mitigation** | Built into the kernel. | Documented as a cooperative cancellation model. Long-running callbacks should periodically check the cancellation flag. |
+
+---
+
+## 33. Thread — Join Support
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | No equivalent `join` API — `vTaskDelete` makes the task vanish immediately. | `Thread::join(&mut retval) -> Result<i32>` — uses `JoinHandle::join()` to wait for the OS thread to complete. |
+| **Behavior** | FreeRTOS has no thread reclamation mechanism after deletion. | Linux `join()` blocks until the target thread exits, reclaims OS resources, and unregisters the thread from the registry. Returns `Error::ThreadNotStarted` if the thread was never started, `Error::ThreadAlreadyJoined` if already joined. |
+| **Mitigation** | N/A. | `join()` is a Linux-backend extension capability not present in the FreeRTOS backend trait. |
+
+---
+
+## 34. Thread — Notification System
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Thread::notify` → `xTaskNotify` / `Thread::wait_notification` → `xTaskNotifyWait` | `Thread::notify` → `StdMutex<ThreadInner>` + `Condvar::notify_all()` / `Thread::wait_notification` → `Condvar::wait` / `Condvar::wait_timeout` |
+| **Behavior** | FreeRTOS task notifications wake the **highest-priority** waiting task. | Linux uses `Condvar::notify_all` — all waiters wake and compete for the lock. The notification value (32-bit) supports `ThreadNotification` enum variants: `NoAction`, `SetBits`, `Increment`, `SetValueWithOverwrite`, `SetValueWithoutOverwrite`. |
+| **Mitigation** | Built into the kernel. | Wake order does not affect correctness — waiters check their condition and re-wait or return. `SetValueWithoutOverwrite` returns `Error::QueueFull` when a pending notification already exists. |
+
+---
+
+## 35. Queue — Close Lifecycle
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | `Queue::delete` → `vQueueDelete` | `Queue::delete` / `Queue::close` → set `closed = true` + `notify_all` on both Condvars |
+| **Behavior** | FreeRTOS deletes the queue and unblocks all waiting tasks, but the return value for unblocked tasks is undefined. | Linux explicitly makes all `post` / `fetch` operations return `Error::QueueClosed` (not `Error::Timeout`) once the queue is closed. `close()` is idempotent. `Drop` also calls `close()`. |
+| **Mitigation** | N/A. | `Error::QueueClosed` is a Linux-backend-specific error variant. Portable code should handle both `Error::Timeout` and `Error::QueueClosed`. |
+
+---
+
+## 36. Poison Recovery
+
+| | FreeRTOS | Linux |
+|---|---|---|
+| **Function** | N/A — FreeRTOS has no mutex poisoning concept. | All Linux primitives (`RawMutex`, `Mutex<T>`, `Queue`, `Semaphore`, `EventGroup`, `Thread`, `System` critical section, `Timer`) use `recover_lock()` to recover from poisoned `StdMutex`. |
+| **Behavior** | N/A. | If a thread panics while holding a Rust `StdMutex`, the mutex becomes "poisoned." `recover_lock()` unpacks the `PoisonError` and continues using the inner data, ensuring that one thread's panic does not permanently disable a synchronization primitive. Each module includes `#[cfg(test)]` tests verifying that primitives remain usable after a panic. |
+| **Mitigation** | N/A. | Recovered data may be inconsistent — callers should perform their own validation. FreeRTOS has no mutex poisoning, so this behavior is a Linux-specific safety net. |
