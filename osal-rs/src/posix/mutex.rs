@@ -18,6 +18,12 @@
  *
  ***************************************************************************/
 
+//! Mutex stub for the POSIX backend (experimental / unimplemented).
+//!
+//! **WARNING:** This module provides no real mutual exclusion.
+//! All lock operations are stubs that succeed without synchronization.
+//! This backend should not be used in production.
+
 use core::cell::UnsafeCell;
 use core::fmt::{Debug, Display, Formatter};
 use core::marker::PhantomData;
@@ -44,19 +50,19 @@ impl RawMutex {
 
 impl RawMutexFn for RawMutex {
 	fn lock(&self) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX RawMutex::lock not implemented")
 	}
 
 	fn lock_from_isr(&self) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX RawMutex::lock_from_isr not implemented")
 	}
 
 	fn unlock(&self) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX RawMutex::unlock not implemented")
 	}
 
 	fn unlock_from_isr(&self) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX RawMutex::unlock_from_isr not implemented")
 	}
 
 	fn delete(&mut self) {

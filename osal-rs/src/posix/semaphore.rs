@@ -18,6 +18,12 @@
  *
  ***************************************************************************/
 
+//! Semaphore stub for the POSIX backend (experimental / unimplemented).
+//!
+//! **WARNING:** This module provides no real semaphore semantics.
+//! All operations are stubs that succeed without synchronization.
+//! This backend should not be used in production.
+
 use core::fmt::{Debug, Display};
 use core::ops::Deref;
 use core::ptr::null;
@@ -43,19 +49,19 @@ impl Semaphore {
 
 impl SemaphoreFn for Semaphore {
 	fn wait(&self, _ticks_to_wait: impl ToTick) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX Semaphore::wait not implemented")
 	}
 
 	fn wait_from_isr(&self) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX Semaphore::wait_from_isr not implemented")
 	}
 
 	fn signal(&self) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX Semaphore::signal not implemented")
 	}
 
 	fn signal_from_isr(&self) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX Semaphore::signal_from_isr not implemented")
 	}
 
 	fn delete(&mut self) {

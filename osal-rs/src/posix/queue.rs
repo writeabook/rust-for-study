@@ -18,6 +18,11 @@
  *
  ***************************************************************************/
 
+//! Queue stub for the POSIX backend (experimental / unimplemented).
+//!
+//! **WARNING:** This module provides no real queue semantics.
+//! All operations are stubs. This backend should not be used in production.
+
 use core::fmt::{Debug, Display};
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -63,19 +68,19 @@ impl Queue {
 
 impl QueueFn for Queue {
 	fn fetch(&self, _buffer: &mut [u8], _time: TickType) -> Result<()> {
-		Err(Error::Timeout)
+		todo!("POSIX Queue::fetch not implemented")
 	}
 
 	fn fetch_from_isr(&self, _buffer: &mut [u8]) -> Result<()> {
-		Err(Error::Timeout)
+		todo!("POSIX Queue::fetch_from_isr not implemented")
 	}
 
 	fn post(&self, _item: &[u8], _time: TickType) -> Result<()> {
-		Ok(())
+		todo!("POSIX Queue::post not implemented")
 	}
 
 	fn post_from_isr(&self, _item: &[u8]) -> Result<()> {
-		Ok(())
+		todo!("POSIX Queue::post_from_isr not implemented")
 	}
 
 	fn delete(&mut self) {
@@ -144,19 +149,19 @@ where
 	T: StructSerde,
 {
 	fn fetch(&self, _buffer: &mut T, _time: TickType) -> Result<()> {
-		Err(Error::Timeout)
+		todo!("POSIX QueueStreamed::fetch not implemented")
 	}
 
 	fn fetch_from_isr(&self, _buffer: &mut T) -> Result<()> {
-		Err(Error::Timeout)
+		todo!("POSIX QueueStreamed::fetch_from_isr not implemented")
 	}
 
 	fn post(&self, _item: &T, _time: TickType) -> Result<()> {
-		Ok(())
+		todo!("POSIX QueueStreamed::post not implemented")
 	}
 
 	fn post_from_isr(&self, _item: &T) -> Result<()> {
-		Ok(())
+		todo!("POSIX QueueStreamed::post_from_isr not implemented")
 	}
 
 	fn delete(&mut self) {
@@ -170,19 +175,19 @@ where
 	T: StructSerde,
 {
 	fn fetch(&self, _buffer: &mut T, _time: TickType) -> Result<()> {
-		Err(Error::Timeout)
+		todo!("POSIX QueueStreamed::fetch not implemented")
 	}
 
 	fn fetch_from_isr(&self, _buffer: &mut T) -> Result<()> {
-		Err(Error::Timeout)
+		todo!("POSIX QueueStreamed::fetch_from_isr not implemented")
 	}
 
 	fn post(&self, _item: &T, _time: TickType) -> Result<()> {
-		Ok(())
+		todo!("POSIX QueueStreamed::post not implemented")
 	}
 
 	fn post_from_isr(&self, _item: &T) -> Result<()> {
-		Ok(())
+		todo!("POSIX QueueStreamed::post_from_isr not implemented")
 	}
 
 	fn delete(&mut self) {

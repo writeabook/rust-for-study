@@ -616,7 +616,7 @@ where
     /// * `Err(Error::Timeout)` - Queue empty or timeout
     /// * `Err(Error)` - Deserialization error
     fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(buffer.len());         
+        let mut buf_bytes = vec![0u8; buffer.len()];
 
         if let Ok(()) = self.0.fetch(&mut buf_bytes, time) {
             *buffer = T::from_bytes(&buf_bytes)?;
@@ -644,7 +644,7 @@ where
     /// 
     /// Must only be called from ISR context.
     fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(buffer.len());      
+        let mut buf_bytes = vec![0u8; buffer.len()];
 
         if let Ok(()) = self.0.fetch_from_isr(&mut buf_bytes) {
             *buffer = T::from_bytes(&buf_bytes)?;
@@ -724,12 +724,10 @@ where
     /// * `Err(Error::Timeout)` - Queue empty or timeout
     /// * `Err(Error::Unhandled)` - Deserialization error
     fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(buffer.len());     
+        let mut buf_bytes = vec![0u8; buffer.len()];
 
         if let Ok(()) = self.0.fetch(&mut buf_bytes, time) {
-            
-            to_bytes(buffer, &mut buf_bytes).map_err(|_| Error::Unhandled("Deserializiation error"))?;
-
+            *buffer = T::from_bytes(&buf_bytes)?;
             Ok(())
         } else {
             Err(Error::Timeout)
@@ -754,10 +752,10 @@ where
     /// 
     /// Must only be called from ISR context.
     fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
-        let mut buf_bytes = Vec::with_capacity(buffer.len());       
+        let mut buf_bytes = vec![0u8; buffer.len()];
 
         if let Ok(()) = self.0.fetch_from_isr(&mut buf_bytes) {
-            to_bytes(buffer, &mut buf_bytes).map_err(|_| Error::Unhandled("Deserializiation error"))?;
+            *buffer = T::from_bytes(&buf_bytes)?;
             Ok(())
         } else {
             Err(Error::Timeout)
@@ -781,9 +779,9 @@ where
     fn post(&self, item: &T, time: TickType) -> Result<()> {
 
 
-        let mut buf_bytes = Vec::with_capacity(item.len()); 
+        let mut buf_bytes = vec![0u8; item.len()]; 
 
-        to_bytes(item, &mut buf_bytes).map_err(|_| Error::Unhandled("Deserializiation error"))?;
+        to_bytes(item, &mut buf_bytes).map_err(|_| Error::Unhandled("Serialization error"))?;
 
         self.0.post(&buf_bytes, time)
     }
@@ -807,9 +805,9 @@ where
     /// Must only be called from ISR context.
     fn post_from_isr(&self, item: &T) -> Result<()> {
 
-        let mut buf_bytes = Vec::with_capacity(item.len()); 
+        let mut buf_bytes = vec![0u8; item.len()]; 
 
-        to_bytes(item, &mut buf_bytes).map_err(|_| Error::Unhandled("Deserializiation error"))?;
+        to_bytes(item, &mut buf_bytes).map_err(|_| Error::Unhandled("Serialization error"))?;
 
         self.0.post_from_isr(&buf_bytes)
     }

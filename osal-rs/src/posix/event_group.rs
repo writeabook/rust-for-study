@@ -18,13 +18,19 @@
  *
  ***************************************************************************/
 
+//! Event group stub for the POSIX backend (experimental / unimplemented).
+//!
+//! **WARNING:** This module provides no real event group semantics.
+//! All operations are stubs that return default values. This backend
+//! should not be used in production.
+
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 use core::ptr::null;
 
 use crate::posix::types::{EventBits, EventGroupHandle, TickType};
 use crate::traits::{EventGroupFn, ToTick};
-use crate::utils::Result;
+use crate::utils::{Error, Result};
 
 pub struct EventGroup(EventGroupHandle);
 
@@ -45,31 +51,31 @@ impl EventGroup {
 
 impl EventGroupFn for EventGroup {
 	fn set(&self, _bits: EventBits) -> EventBits {
-		0
+		todo!("POSIX EventGroup::set not implemented")
 	}
 
 	fn set_from_isr(&self, _bits: EventBits) -> Result<()> {
-		Ok(())
+		todo!("POSIX EventGroup::set_from_isr not implemented")
 	}
 
 	fn get(&self) -> EventBits {
-		0
+		todo!("POSIX EventGroup::get not implemented")
 	}
 
 	fn get_from_isr(&self) -> EventBits {
-		0
+		todo!("POSIX EventGroup::get_from_isr not implemented")
 	}
 
 	fn clear(&self, _bits: EventBits) -> EventBits {
-		0
+		todo!("POSIX EventGroup::clear not implemented")
 	}
 
 	fn clear_from_isr(&self, _bits: EventBits) -> Result<()> {
-		Ok(())
+		todo!("POSIX EventGroup::clear_from_isr not implemented")
 	}
 
 	fn wait(&self, _mask: EventBits, _timeout_ticks: TickType) -> EventBits {
-		0
+		todo!("POSIX EventGroup::wait not implemented")
 	}
 
 	fn delete(&mut self) {

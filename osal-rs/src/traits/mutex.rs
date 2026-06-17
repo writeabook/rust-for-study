@@ -114,24 +114,20 @@ where
     /// Attempts to acquire the lock without blocking. Must only be
     /// called from interrupt service routine context.
     ///
+    /// **WARNING:** On the FreeRTOS backend, recursive mutexes cannot be used
+    /// from ISR context. This method always returns `False` on FreeRTOS.
+    /// Use a semaphore or critical section for ISR synchronization instead.
+    /// The Linux backend implements this as a non-blocking try-lock.
+    ///
     /// # Returns
     ///
     /// * `True` - Lock was successfully acquired
-    /// * `False` - Lock is currently held by another task
+    /// * `False` - Lock is currently held by another task, or ISR mutex
+    ///   operations are not supported on this backend
     ///
     /// # Note
     ///
     /// This is a try-lock operation that returns immediately.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // In ISR handler
-    /// if raw_mutex.lock_from_isr() {
-    ///     // Quick critical operation
-    ///     raw_mutex.unlock_from_isr();
-    /// }
-    /// ```
     fn lock_from_isr(&self) -> OsalRsBool;
 
     /// Unlocks the mutex.
@@ -155,10 +151,15 @@ where
     /// Releases the mutex that was previously acquired by `lock_from_isr()`.
     /// Must only be called from interrupt context.
     ///
+    /// **WARNING:** On the FreeRTOS backend, recursive mutexes cannot be used
+    /// from ISR context. This method always returns `False` on FreeRTOS.
+    /// Use a semaphore or critical section for ISR synchronization instead.
+    /// The Linux backend implements this as a non-blocking unlock.
+    ///
     /// # Returns
     ///
     /// * `True` - Unlock succeeded
-    /// * `False` - Unlock failed
+    /// * `False` - Unlock failed, or ISR mutex operations are not supported
     fn unlock_from_isr(&self) -> OsalRsBool;
 
     /// Deletes the mutex and frees its resources.
@@ -294,10 +295,16 @@ pub trait Mutex<T: ?Sized> {
     /// use in interrupt service routines. Returns immediately whether or
     /// not the lock was acquired.
     ///
+    /// **WARNING:** On the FreeRTOS backend, recursive mutexes cannot be used
+    /// from ISR context. This method always returns `Err(Error::MutexLockFailed)`
+    /// on FreeRTOS. Use a semaphore or critical section for ISR synchronization instead.
+    /// The Linux backend implements this as a non-blocking try-lock.
+    ///
     /// # Returns
     ///
     /// * `Ok(GuardFromIsr)` - Lock acquired successfully
-    /// * `Err(Error)` - Lock is currently held, try again later
+    /// * `Err(Error::MutexLockFailed)` - Lock is currently held, or ISR mutex
+    ///   operations are not supported on this backend
     ///
     /// # Examples
     ///

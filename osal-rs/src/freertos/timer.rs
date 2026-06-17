@@ -319,7 +319,7 @@ impl Timer {
     /// # Parameters
     /// 
     /// * `new_period_in_ticks` - New timer period
-    /// * `new_period_ticks` - Maximum time to wait for the command to be sent to timer daemon
+    /// * `ticks_to_wait` - Maximum time to wait for the command to be sent to timer daemon
     /// 
     /// # Returns
     /// 
@@ -339,8 +339,8 @@ impl Timer {
     /// );
     /// ```
     #[inline]
-    pub fn change_period_with_to_tick(&self, new_period_in_ticks: impl ToTick, new_period_ticks: impl ToTick) -> OsalRsBool {
-        self.change_period(new_period_in_ticks.to_ticks(), new_period_ticks.to_ticks())
+    pub fn change_period_with_to_tick(&self, new_period_in_ticks: impl ToTick, ticks_to_wait: impl ToTick) -> OsalRsBool {
+        self.change_period(new_period_in_ticks.to_ticks(), ticks_to_wait.to_ticks())
     }
 
     /// Deletes the timer with tick conversion.
@@ -473,7 +473,8 @@ impl TimerFn for Timer {
     /// Starts the timer.
     /// 
     /// Sends a command to the timer daemon to start the timer. If the timer
-    /// was already running, this has no effect.
+    /// is already running, this is equivalent to calling `reset()` — the
+    /// timer restarts its period countdown.
     /// 
     /// # Parameters
     /// 
@@ -573,7 +574,7 @@ impl TimerFn for Timer {
     /// # Parameters
     /// 
     /// * `new_period_in_ticks` - New period for the timer in ticks
-    /// * `new_period_ticks` - Maximum time to wait for command to be sent to timer daemon
+    /// * `ticks_to_wait` - Maximum time to wait for command to be sent to timer daemon
     /// 
     /// # Returns
     /// 
@@ -588,9 +589,9 @@ impl TimerFn for Timer {
     /// // Change period from 1000 ticks to 500 ticks
     /// timer.change_period(500, 10);
     /// ```
-    fn change_period(&self, new_period_in_ticks: TickType, new_period_ticks: TickType) -> OsalRsBool {
+    fn change_period(&self, new_period_in_ticks: TickType, ticks_to_wait: TickType) -> OsalRsBool {
         if unsafe {
-            osal_rs_timer_change_period(self.handle, new_period_in_ticks, new_period_ticks)
+            osal_rs_timer_change_period(self.handle, new_period_in_ticks, ticks_to_wait)
         } != pdPASS {
             OsalRsBool::False
         } else {

@@ -18,6 +18,12 @@
  *
  ***************************************************************************/
 
+//! Timer stub for the POSIX backend (experimental / unimplemented).
+//!
+//! **WARNING:** This module provides no real timer semantics.
+//! Timer operations never fire callbacks. This backend should not be
+//! used in production.
+
 use core::fmt::{Debug, Display};
 use core::ops::Deref;
 use core::ptr::null;
@@ -93,19 +99,19 @@ impl Timer {
 
 impl TimerFn for Timer {
 	fn start(&self, _ticks_to_wait: TickType) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX Timer::start not implemented")
 	}
 
 	fn stop(&self, _ticks_to_wait: TickType) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX Timer::stop not implemented")
 	}
 
 	fn reset(&self, _ticks_to_wait: TickType) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX Timer::reset not implemented")
 	}
 
 	fn change_period(&self, _new_period_in_ticks: TickType, _new_period_ticks: TickType) -> OsalRsBool {
-		OsalRsBool::True
+		todo!("POSIX Timer::change_period not implemented")
 	}
 
 	fn delete(&mut self, _ticks_to_wait: TickType) -> OsalRsBool {

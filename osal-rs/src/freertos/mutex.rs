@@ -108,43 +108,16 @@ impl RawMutexFn for RawMutex {
 
     /// Attempts to acquire the mutex from an interrupt service routine (ISR).
     /// 
-    /// This is the ISR-safe version of `lock()`. It attempts to acquire the mutex
-    /// without blocking. If a higher priority task is woken, a context switch is triggered.
+    /// **WARNING:** FreeRTOS does not support taking recursive mutexes from ISR
+    /// context. This method always returns `OsalRsBool::False` on the FreeRTOS
+    /// backend. Use a semaphore or critical section instead.
     /// 
     /// # Returns
     /// 
-    /// * `OsalRsBool::True` - Successfully acquired the mutex
-    /// * `OsalRsBool::False` - Mutex is already locked
-    /// 
-    /// # Safety
-    /// 
-    /// Must only be called from ISR context.
-    /// 
-    /// # Examples
-    /// 
-    /// ```ignore
-    /// // In interrupt handler
-    /// use osal_rs::os::RawMutex;
-    /// use osal_rs::traits::RawMutexFn;
-    /// 
-    /// fn irq_handler(mutex: &RawMutex) {
-    ///     if mutex.lock_from_isr() == OsalRsBool::True {
-    ///         // Critical section
-    ///         mutex.unlock_from_isr();
-    ///     }
-    /// }
-    /// ```
+    /// * `OsalRsBool::False` - Always returns False on FreeRTOS (recursive
+    ///   mutexes cannot be used from ISR context)
     fn lock_from_isr(&self) -> OsalRsBool {
-        let mut higher_priority_task_woken = pdFALSE;
-        let res = xSemaphoreTakeFromISR!(self.0, &mut higher_priority_task_woken);
-        if res == pdTRUE {
-
-            System::yield_from_isr(higher_priority_task_woken);
-
-            OsalRsBool::True
-        } else {
-            OsalRsBool::False
-        }
+        OsalRsBool::False
     }
 
     /// Releases the mutex.
@@ -180,43 +153,16 @@ impl RawMutexFn for RawMutex {
 
     /// Releases the mutex from an interrupt service routine (ISR).
     /// 
-    /// This is the ISR-safe version of `unlock()`. If a higher priority task
-    /// is woken by releasing the mutex, a context switch is triggered.
+    /// **WARNING:** FreeRTOS does not support giving recursive mutexes from ISR
+    /// context. This method always returns `OsalRsBool::False` on the FreeRTOS
+    /// backend. Use a semaphore or critical section instead.
     /// 
     /// # Returns
     /// 
-    /// * `OsalRsBool::True` - Successfully released the mutex
-    /// * `OsalRsBool::False` - Failed to release
-    /// 
-    /// # Safety
-    /// 
-    /// Must only be called from ISR context.
-    /// 
-    /// # Examples
-    /// 
-    /// ```ignore
-    /// // In interrupt handler
-    /// use osal_rs::os::RawMutex;
-    /// use osal_rs::traits::RawMutexFn;
-    /// 
-    /// fn irq_handler(mutex: &RawMutex) {
-    ///     if mutex.lock_from_isr() == OsalRsBool::True {
-    ///         // Critical section
-    ///         mutex.unlock_from_isr();
-    ///     }
-    /// }
-    /// ```
+    /// * `OsalRsBool::False` - Always returns False on FreeRTOS (recursive
+    ///   mutexes cannot be used from ISR context)
     fn unlock_from_isr(&self) -> OsalRsBool {
-        let mut higher_priority_task_woken = pdFALSE;
-        let res = xSemaphoreGiveFromISR!(self.0, &mut higher_priority_task_woken);
-        if res == pdTRUE {
-            
-            System::yield_from_isr(higher_priority_task_woken);
-            
-            OsalRsBool::True
-        } else {
-            OsalRsBool::False
-        }
+        OsalRsBool::False
     }
 
     /// Deletes the mutex and frees its resources.
