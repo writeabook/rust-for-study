@@ -48,17 +48,18 @@ use osal_rs::utils::Result;
 // ---------------------------------------------------------------------------
 
 const PACKET_SIZE: usize = 16;
-const QUEUE_CAPACITY: usize = 16;
+const QUEUE_CAPACITY: usize = 128; // large enough for producer head-start
 const PRODUCER_COUNT: u32 = 2;
 const CONSUMER_COUNT: u32 = 3;
 /// Number of tasks that signal the ready semaphore (all except Supervisor).
 const TOTAL_READY_TASKS: u32 = PRODUCER_COUNT + CONSUMER_COUNT + 1; // +1 = Monitor
-const PRODUCER_PERIOD_TICKS: TickType = 50;
+const PRODUCER_HEAD_START_TICKS: TickType = 1000; // producer runs alone for this many ticks
+const PRODUCER_PERIOD_TICKS: TickType = 25;
 const CONSUMER_PROCESS_TICKS: TickType = 30;
 const QUEUE_FETCH_TIMEOUT_TICKS: TickType = 100;
 const QUEUE_POST_TIMEOUT_TICKS: TickType = 100;
-const DEMO_FIRST_PHASE_TICKS: TickType = 2000;
-const DEMO_SECOND_PHASE_TICKS: TickType = 3000;
+const DEMO_FIRST_PHASE_TICKS: TickType = 2001;
+const DEMO_SECOND_PHASE_TICKS: TickType = 3001;
 const MONITOR_WAIT_TICKS: TickType = 2000;
 const TIMER_PERIOD_TICKS: TickType = 1000;
 const STACK_SIZE: StackType = 1024;
@@ -71,6 +72,7 @@ const START_BIT: EventBits = 1 << 0;
 const STOP_BIT: EventBits = 1 << 1;
 const ERROR_BIT: EventBits = 1 << 2;
 const DONE_BIT: EventBits = 1 << 3;
+const CONSUMER_GO_BIT: EventBits = 1 << 4;
 const TIMER_TICK_BIT: u32 = 1 << 0;
 
 // ---------------------------------------------------------------------------
@@ -160,6 +162,35 @@ fn producer_task(id: u32, res: Arc<DemoResources>) {
     let mut seq = 0u32;
     let mut last_wake = System::get_tick_count();
 
+    // — Head-start: produce alone for PRODUCER_HEAD_START_TICKS ticks.
+    let start_tick = System::get_tick_count();
+    while System::get_tick_count().wrapping_sub(start_tick) < PRODUCER_HEAD_START_TICKS {
+        if res.events.get() & STOP_BIT != 0 {
+            return;
+        }
+
+        let tick = System::get_tick_count();
+        let packet = build_packet(id, seq, tick);
+
+        match res.queue.post(&packet, QUEUE_POST_TIMEOUT_TICKS) {
+            Ok(_) => {
+                let mut s = res.stats.lock().unwrap();
+                s.produced += 1;
+            }
+            Err(_) => {
+                let mut s = res.stats.lock().unwrap();
+                s.dropped += 1;
+            }
+        }
+
+        seq = seq.wrapping_add(1);
+        System::delay_until(&mut last_wake, PRODUCER_PERIOD_TICKS);
+    }
+
+    // Signal consumers that they can start.
+    res.events.set(CONSUMER_GO_BIT);
+
+    // — Main loop: keep producing until STOP_BIT is set.
     loop {
         if res.events.get() & STOP_BIT != 0 {
             break;
@@ -191,7 +222,13 @@ fn producer_task(id: u32, res: Arc<DemoResources>) {
 fn consumer_task(res: Arc<DemoResources>) {
     res.ready_sem.signal();
 
+    // Wait for START, and then for CONSUMER_GO (or immediate STOP).
     if res.events.wait(START_BIT | STOP_BIT, TickType::MAX) & STOP_BIT != 0 {
+        return;
+    }
+
+    // Wait until producers finish their head-start.
+    if res.events.wait(CONSUMER_GO_BIT | STOP_BIT, TickType::MAX) & STOP_BIT != 0 {
         return;
     }
 
@@ -277,7 +314,7 @@ fn timer_callback(_timer: Box<dyn TimerFn>, param: Option<TimerParam>) -> Result
 }
 
 // ---------------------------------------------------------------------------
-// Supervisor task  — lifecycle controller (now a real OSAL Thread)
+// Supervisor task  — lifecycle controller
 // ---------------------------------------------------------------------------
 
 fn supervisor_task(res: Arc<DemoResources>, heartbeat: Arc<Timer>) {
@@ -291,17 +328,20 @@ fn supervisor_task(res: Arc<DemoResources>, heartbeat: Arc<Timer>) {
     res.events.set(START_BIT);
     heartbeat.start(0);
 
-    // Phase 1 — default timer period.
+    // Phase 1 — producer head-start.
+    System::delay(PRODUCER_HEAD_START_TICKS);
+
+    // Phase 2 — default timer period.
     System::delay(DEMO_FIRST_PHASE_TICKS);
 
     // Change period mid-demo.
     heartbeat.change_period(TIMER_PERIOD_TICKS / 2, 0);
     heartbeat.reset(0);
 
-    // Phase 2 — faster timer period.
+    // Phase 3 — faster timer period.
     System::delay(DEMO_SECOND_PHASE_TICKS);
 
-    // Phase 3 — graceful shutdown.
+    // Phase 4 — graceful shutdown.
     demo_log!("[supervisor] set STOP_BIT");
     res.events.set(STOP_BIT);
 
