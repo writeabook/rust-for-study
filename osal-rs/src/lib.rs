@@ -222,6 +222,16 @@
 
 extern crate alloc;
 
+// ---------------------------------------------------------------------------
+// Backend mutual-exclusion guard
+// ---------------------------------------------------------------------------
+#[cfg(any(
+    all(feature = "freertos", feature = "linux"),
+    all(feature = "freertos", feature = "posix"),
+    all(feature = "linux", feature = "posix"),
+))]
+compile_error!("Only one OSAL backend feature may be enabled at a time (freertos | linux | posix).");
+
 #[cfg(all(feature = "linux", not(feature = "std")))]
 compile_error!("The `linux` backend requires the `std` feature.");
 

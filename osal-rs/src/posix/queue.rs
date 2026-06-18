@@ -30,7 +30,7 @@
 //!   and closed flag.
 //! - **Condition variables**: `not_empty` wakes consumers when a producer
 //!   pushes; `not_full` wakes producers when a consumer pops.
-//! - **Timeout**: `pthread_cond_timedwait` with `CLOCK_REALTIME` absolute
+//! - **Timeout**: `pthread_cond_timedwait` with `CLOCK_MONOTONIC` absolute
 //!   deadlines.
 //! - **ISR emulation**: `pthread_mutex_trylock` for non-blocking send/recv.
 //!
@@ -100,11 +100,11 @@ impl Queue {
         if size == 0 || message_size == 0 {
             return Err(Error::OutOfMemory);
         }
-        let mtx = ffi::create_mutex(1) // PTHREAD_MUTEX_ERRORCHECK
+        let mtx = ffi::create_mutex(ffi::PTHREAD_MUTEX_ERRORCHECK)
             .ok_or(Error::OutOfMemory)?;
-        let not_empty = ffi::create_cond()
+        let not_empty = ffi::create_cond_monotonic()
             .ok_or(Error::OutOfMemory)?;
-        let not_full = ffi::create_cond()
+        let not_full = ffi::create_cond_monotonic()
             .ok_or(Error::OutOfMemory)?;
         Ok(Self {
             mtx,
@@ -184,7 +184,7 @@ impl QueueFn for Queue {
         }
 
         // Finite wait
-        let now = ffi::realtime_now();
+        let now = ffi::realtime_monotonic();
         let deadline = ffi::timespec_add_ms(&now, time as u64);
 
         loop {
@@ -271,7 +271,7 @@ impl QueueFn for Queue {
         }
 
         // Finite wait
-        let now = ffi::realtime_now();
+        let now = ffi::realtime_monotonic();
         let deadline = ffi::timespec_add_ms(&now, time as u64);
 
         loop {
