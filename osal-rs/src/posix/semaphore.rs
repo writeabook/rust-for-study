@@ -3,63 +3,31 @@
  * osal-rs
  * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <https://www.gnu.org/licenses/>.
+ * ... LGPL-2.1 header ...
  *
  ***************************************************************************/
 
-//! Native POSIX semaphore implementation using `sem_t`.
-//!
-//! # Design
-//!
-//! Unlike the Linux backend (which uses `StdMutex<State>` + `Condvar` with
-//! manual count tracking), this module delegates to the kernel's `sem_t`
-//! for wait/wake semantics:
-//!
-//! - **Blocking wait**: `sem_wait()` / `sem_timedwait()` — kernel-managed,
-//!   automatically unblocks the highest-priority waiter.
-//! - **Non-blocking wait**: `sem_trywait()` — returns immediately if count
-//!   is zero.
-//! - **Signal**: `sem_post()` — increments count, wakes one waiter via
-//!   the kernel scheduler.
-//! - **Max-count enforcement**: Since POSIX `sem_t` has no built-in maximum,
-//!   we store `max_count` separately and check with `sem_getvalue()` before
-//!   calling `sem_post()`.
-//!
-//! # ISR path
-//!
-//! `wait_from_isr()` / `signal_from_isr()` mirror the task-level path using
-//! `sem_trywait()` / `sem_post()` — neither blocks, matching ISR expectations
-//! for host testing.
+//! Counting semaphore using `pthread_mutex_t` + `pthread_cond_t` + count.
+//! Replaces `sem_t` — solves max_count race and CLOCK_REALTIME dependency.
 
+use core::cell::UnsafeCell;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
-use core::time::Duration;
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use super::ffi::{self, SemT, Timespec};
+use super::sys::clock;
+use super::sys::condvar::PosixCondvar;
+use super::sys::mutex::PosixMutex;
 use super::types::{SemaphoreHandle, UBaseType};
 use crate::traits::SemaphoreFn;
 use crate::traits::ToTick;
 use crate::utils::{Error, OsalRsBool, Result};
 
-// ---------------------------------------------------------------------------
-// Semaphore — counting semaphore on POSIX sem_t
-// ---------------------------------------------------------------------------
+use libc::PTHREAD_MUTEX_ERRORCHECK;
 
 pub struct Semaphore {
-    sem: *mut SemT,
+    mtx: PosixMutex,
+    cond: PosixCondvar,
+    count: UnsafeCell<u32>,
     max_count: u32,
     handle: SemaphoreHandle,
 }
@@ -69,105 +37,71 @@ unsafe impl Sync for Semaphore {}
 
 impl Semaphore {
     pub fn new(max_count: UBaseType, initial_count: UBaseType) -> Result<Self> {
-        if initial_count > max_count {
-            return Err(Error::OutOfMemory);
-        }
-        let sem = ffi::create_sem(initial_count)
-            .ok_or(Error::OutOfMemory)?;
-        Ok(Self { sem, max_count, handle: sem as SemaphoreHandle })
+        if initial_count > max_count { return Err(Error::OutOfMemory); }
+        let mtx = PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).ok_or(Error::OutOfMemory)?;
+        let cond = PosixCondvar::new().ok_or(Error::OutOfMemory)?;
+        let handle = mtx.raw_ptr() as SemaphoreHandle;
+        Ok(Self { mtx, cond, count: UnsafeCell::new(initial_count), max_count, handle })
     }
 
     pub fn new_with_count(initial_count: UBaseType) -> Result<Self> {
         Self::new(UBaseType::MAX, initial_count)
     }
+
+    fn count(&self) -> &mut u32 { unsafe { &mut *self.count.get() } }
 }
 
 impl SemaphoreFn for Semaphore {
     fn wait(&self, ticks_to_wait: impl ToTick) -> OsalRsBool {
         let ticks = ticks_to_wait.to_ticks();
+        let _ = self.mtx.lock();
 
-        // Zero ticks: try-wait only
-        if ticks == 0 {
-            return if unsafe { ffi::sem_trywait(self.sem) } == 0 {
-                OsalRsBool::True
-            } else {
-                OsalRsBool::False
-            };
-        }
+        if *self.count() > 0 { *self.count() -= 1; let _ = self.mtx.unlock(); return OsalRsBool::True; }
+        if ticks == 0 { let _ = self.mtx.unlock(); return OsalRsBool::False; }
 
-        // Infinite wait
         if ticks == UBaseType::MAX {
             loop {
-                if unsafe { ffi::sem_wait(self.sem) } == 0 {
-                    return OsalRsBool::True;
-                }
-                // EINTR — retry
+                self.cond.wait(&self.mtx);
+                if *self.count() > 0 { *self.count() -= 1; let _ = self.mtx.unlock(); return OsalRsBool::True; }
             }
         }
 
-        // Finite wait: sem_timedwait with absolute deadline (CLOCK_REALTIME)
-        let timeout = Duration::from_millis(ticks as u64);
-        let deadline = match SystemTime::now().checked_add(timeout) {
-            Some(d) => d,
-            None => return OsalRsBool::False,
-        };
-        let since_epoch = match deadline.duration_since(UNIX_EPOCH) {
-            Ok(d) => d,
-            Err(_) => return OsalRsBool::False,
-        };
-        let abs_ts = Timespec {
-            tv_sec: since_epoch.as_secs() as i64,
-            tv_nsec: since_epoch.subsec_nanos() as i64,
-        };
-
-        if unsafe { ffi::sem_timedwait(self.sem, &abs_ts) } == 0 {
-            OsalRsBool::True
-        } else {
-            OsalRsBool::False
+        let deadline = clock::deadline_from_ms(ticks as u64);
+        loop {
+            if !self.cond.timedwait(&self.mtx, &deadline) { let _ = self.mtx.unlock(); return OsalRsBool::False; }
+            if *self.count() > 0 { *self.count() -= 1; let _ = self.mtx.unlock(); return OsalRsBool::True; }
         }
     }
 
     fn wait_from_isr(&self) -> OsalRsBool {
-        if unsafe { ffi::sem_trywait(self.sem) } == 0 {
-            OsalRsBool::True
-        } else {
-            OsalRsBool::False
-        }
+        if !self.mtx.try_lock() { return OsalRsBool::False; }
+        if *self.count() > 0 { *self.count() -= 1; let _ = self.mtx.unlock(); OsalRsBool::True }
+        else { let _ = self.mtx.unlock(); OsalRsBool::False }
     }
 
     fn signal(&self) -> OsalRsBool {
-        // Check max_count before posting
-        let mut current: i32 = 0;
-        if unsafe { ffi::sem_getvalue(self.sem, &mut current) } != 0 {
-            return OsalRsBool::False;
-        }
-        if (current as u32) >= self.max_count {
-            return OsalRsBool::False;
-        }
-        if unsafe { ffi::sem_post(self.sem) } == 0 {
+        let _ = self.mtx.lock();
+        if *self.count() < self.max_count {
+            *self.count() += 1;
+            self.cond.signal();
+            let _ = self.mtx.unlock();
             OsalRsBool::True
         } else {
+            let _ = self.mtx.unlock();
             OsalRsBool::False
         }
     }
 
-    fn signal_from_isr(&self) -> OsalRsBool {
-        self.signal()
-    }
+    fn signal_from_isr(&self) -> OsalRsBool { self.signal() }
 
-    fn delete(&mut self) {
-        if !self.sem.is_null() {
-            unsafe { ffi::destroy_sem(self.sem) };
-            self.sem = core::ptr::null_mut();
-        }
-    }
+    fn delete(&mut self) {}
 }
 
 impl Drop for Semaphore {
     fn drop(&mut self) {
-        if !self.sem.is_null() {
-            unsafe { ffi::destroy_sem(self.sem) };
-        }
+        let _ = self.mtx.lock();
+        self.cond.broadcast();
+        let _ = self.mtx.unlock();
     }
 }
 
@@ -178,24 +112,17 @@ impl Deref for Semaphore {
 
 impl Debug for Semaphore {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        let mut current: i32 = 0;
-        let _ = unsafe { ffi::sem_getvalue(self.sem, &mut current) };
-        f.debug_struct("Semaphore")
-            .field("count", &current)
-            .field("max_count", &self.max_count)
-            .field("handle", &self.handle)
-            .finish()
+        let _ = self.mtx.lock();
+        let c = *self.count();
+        let _ = self.mtx.unlock();
+        f.debug_struct("Semaphore").field("count", &c).field("max", &self.max_count).finish()
     }
 }
-
 impl Display for Semaphore {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        let mut current: i32 = 0;
-        let _ = unsafe { ffi::sem_getvalue(self.sem, &mut current) };
-        write!(
-            f,
-            "Semaphore {{ count: {}, max: {} }}",
-            current, self.max_count
-        )
+        let _ = self.mtx.lock();
+        let c = *self.count();
+        let _ = self.mtx.unlock();
+        write!(f, "Semaphore {{ count: {c} }}")
     }
 }

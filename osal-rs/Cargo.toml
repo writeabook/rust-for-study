@@ -27,7 +27,7 @@ crate-type = ["staticlib", "rlib"]
 [features]
 default = ["freertos"]
 freertos = []
-posix = ["std"]
+posix = ["std", "libc"]
 linux = ["std"]
 std = ["disable_panic"]
 disable_panic = []
@@ -35,6 +35,7 @@ serde = ["osal-rs-serde"]
 
 
 [dependencies]
+libc = { version = "0.2", optional = true, default-features = false }
 osal-rs-serde = { version = "0.5", path = "../osal-rs-serde", features = ["derive"], optional = true }
 
 [build-dependencies]
