@@ -17,6 +17,13 @@
 //! - Callbacks execute outside the lock; commands during callback go through
 //!   `CallbackCommand` and are applied after the callback returns.
 //! - Fixed-period auto-reload with catch-up prevention.
+//!
+//! # Migration status (std → no_std)
+//!
+//! TODO(posix-no-std): The Timer Service Thread currently uses `std::thread`,
+//! `OnceLock`, and `catch_unwind` as transitional helpers.  The final POSIX
+//! core should migrate to `libc::pthread_create`, `pthread_once_t`, and
+//! `panic=abort`, with collections from `alloc`.
 
 use core::cell::UnsafeCell;
 use core::cmp::Ordering;
@@ -247,7 +254,7 @@ impl Timer {
         let id = *field!(p, next_id);
         *field!(p, next_id) = id.checked_add(1).expect("Timer id overflow");
         field!(p, timers).insert(id, TimerRecord {
-            id, period_ms: if auto_reload { period_ticks as u64 } else { 0 },
+            id, period_ms: period_ticks as u64,
             auto_reload, state: TimerState::Stopped, generation: 0,
             callback: Arc::new(callback), param,
         });
@@ -342,15 +349,13 @@ impl TimerFn for Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        // id == 0 indicates a callback-box handle — do NOT call stop()
+        // id == 0 indicates a callback-box handle — do NOT call delete()
         if self.id > 0 {
-            self.stop(0);
+            self.delete(0);
         }
     }
 }
 impl Deref for Timer { type Target = TimerHandle; fn deref(&self) -> &Self::Target { &self.handle } }
-impl Clone for Timer { fn clone(&self) -> Self { Self { id: self.id, handle: self.handle } } }
-
 impl Debug for Timer {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Timer").field("id", &self.id).finish()
