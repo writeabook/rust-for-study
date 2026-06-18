@@ -18,18 +18,7 @@
  *
  ***************************************************************************/
 
-use core::ffi::c_void;
+//! POSIX backend type definitions — currently delegates to the Linux
+//! reference implementation.  See `crate::linux::types` for documentation.
 
-pub type TickType = u64;
-pub type BaseType = i64;
-pub type UBaseType = u64;
-pub type StackType = usize;
-
-pub type ThreadHandle = *const c_void;
-pub type QueueHandle = *const c_void;
-pub type SemaphoreHandle = *const c_void;
-pub type EventGroupHandle = *const c_void;
-pub type TimerHandle = *const c_void;
-pub type MutexHandle = *const c_void;
-
-pub type EventBits = TickType;
+pub use crate::linux::types::*;

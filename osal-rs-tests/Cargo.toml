@@ -15,6 +15,7 @@ crate-type = ["staticlib", "rlib"]
 default = ["freertos"]
 freertos = ["osal-rs/freertos"]
 linux = ["osal-rs/linux"]
+posix = ["osal-rs/posix"]
 serde = ["osal-rs/serde", "osal-rs-serde"]
 
 [dependencies]

@@ -18,32 +18,59 @@
  *
  ***************************************************************************/
 
-#[cfg(feature = "std")]
+//! POSIX OSAL backend module.
+//!
+//! This module provides the POSIX (host) backend for the OSAL-RS abstraction
+//! layer.  It is currently built on top of the Linux reference implementation
+//! (`crate::linux`), which uses safe Rust standard library primitives.  Each
+//! sub-module re-exports the corresponding Linux implementation.
+//!
+//! # Architecture (NASA OSAL pattern)
+//!
+//! Following NASA's OSAL architecture, **POSIX is the adaptation layer** and
+//! **Linux is one BSP / reference implementation** of that layer:
+//!
+//! ```text
+//!   Application code
+//!        ↓
+//!   pub mod os  (unified API)
+//!        ↓
+//!   posix/      (POSIX adaptation layer — thin wrapper)
+//!        ↓
+//!   linux/      (reference host implementation — full code)
+//!        ↓
+//!   std::thread, std::sync::Mutex, std::sync::Condvar, ...
+//! ```
+//!
+//! # Design
+//!
+//! - Currently all sub-modules delegate to the Linux backend via `pub use`.
+//! - Individual modules can be replaced with native POSIX primitives
+//!   (`pthread_mutex_t`, `sem_open`, `mq_open`, `timer_create`, …) in
+//!   future phases **without affecting the Linux backend**.
+//! - The Linux backend remains independently usable via
+//!   `--features linux,std`.
+//!
+//! # Modules
+//!
+//! - [`config`] — Backend-wide constants (tick period, feature flags).
+//! - [`types`] — Type aliases (TickType, handle types, etc.).
+//! - [`duration`] — `ToTick` / `FromTick` impls for `core::time::Duration`.
+//! - [`system`] — System-level operations (time, delays, critical sections).
+//! - [`thread`] — Thread state, metadata, registry, and cooperative cancellation.
+//! - [`mutex`] — `RawMutex` (recursive) and `Mutex<T>` (non-recursive).
+//! - [`semaphore`] — Binary and counting semaphores.
+//! - [`event_group`] — Multi-bit event-group synchronization.
+//! - [`queue`] — Raw `Queue` and type-safe `QueueStreamed<T>`.
+//! - [`timer`] — Periodic and one-shot software timers.
+
 pub mod config;
-
-#[cfg(feature = "std")]
 pub(crate) mod duration;
-
-#[cfg(feature = "std")]
 pub mod event_group;
-
-#[cfg(feature = "std")]
 pub mod mutex;
-
-#[cfg(feature = "std")]
 pub mod queue;
-
-#[cfg(feature = "std")]
 pub mod semaphore;
-
-#[cfg(feature = "std")]
 pub mod system;
-
-#[cfg(feature = "std")]
 pub mod thread;
-
-#[cfg(feature = "std")]
 pub mod timer;
-
-#[cfg(feature = "std")]
 pub mod types;

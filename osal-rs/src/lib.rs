@@ -222,9 +222,6 @@
 
 extern crate alloc;
 
-#[cfg(all(feature = "posix", not(feature = "std")))]
-compile_error!("The `posix` backend requires the `std` feature.");
-
 #[cfg(all(feature = "linux", not(feature = "std")))]
 compile_error!("The `linux` backend requires the `std` feature.");
 
@@ -240,23 +237,27 @@ compile_error!("Enable either the `freertos` backend or the `std` host backend."
 #[cfg(feature = "freertos")]
 mod freertos;
 
-/// POSIX implementation of OSAL traits (planned).
+/// Linux host reference implementation.
 ///
-/// This module will contain the implementation for POSIX-compliant systems.
-/// Currently under development.
+/// This module is the reference host implementation for all OSAL traits
+/// using safe Rust standard library primitives.  It is compiled when
+/// either the `linux` or `posix` feature is active — the POSIX backend
+/// re-exports from this module.
 ///
-/// Enabled with the `posix` feature flag.
-#[cfg(all(feature = "std", not(feature = "freertos"), not(feature = "linux")))]
-mod posix;
-
-/// Linux OSAL backend (planned).
-///
-/// This module will contain the Linux-specific OSAL implementation.
-/// Currently reserved for future development.
-///
-/// Enabled with the `linux` feature flag.
-#[cfg(all(feature = "linux", not(feature = "freertos"), not(feature = "posix")))]
+/// Enabled with the `linux` or `posix` feature flag.
+#[cfg(any(feature = "linux", feature = "posix"))]
 mod linux;
+
+/// POSIX OSAL backend — thin wrapper around the Linux reference implementation.
+///
+/// Following NASA's OSAL architecture, POSIX is the adaptation layer and
+/// Linux is one BSP / reference implementation.  Individual modules can be
+/// replaced with native POSIX primitives in future phases without affecting
+/// the Linux backend.
+///
+/// Enabled with the `posix` feature flag (when `linux` is not also enabled).
+#[cfg(all(feature = "posix", not(feature = "linux")))]
+mod posix;
 
 pub mod log;
 
@@ -272,13 +273,13 @@ pub mod utils;
 #[cfg(feature = "freertos")]
 use crate::freertos as osal;
 
-/// Select POSIX as the active OSAL backend.
-#[cfg(all(feature = "std", not(feature = "freertos"), not(feature = "linux")))]
-use crate::posix as osal;
-
-/// Select Linux as the active OSAL backend (reserved for future development).
-#[cfg(all(feature = "linux", not(feature = "freertos"), not(feature = "posix")))]
+/// Select Linux as the active OSAL backend.
+#[cfg(feature = "linux")]
 use crate::linux as osal;
+
+/// Select POSIX as the active OSAL backend (thin wrapper around Linux).
+#[cfg(all(feature = "posix", not(feature = "linux")))]
+use crate::posix as osal;
 
 /// Main OSAL module re-exporting all OS abstractions and traits.
 ///
@@ -388,11 +389,12 @@ pub mod os {
 
 }
 
-/// OSAL module for Linux backend (reserved for future development).
+/// OSAL module for the Linux backend.
 ///
-/// Provides a minimal `os` module so that trait code continues to compile
-/// while the Linux backend is under development.
-#[cfg(all(feature = "linux", not(feature = "freertos"), not(feature = "posix")))]
+/// This module is active when `linux` is the selected host backend
+/// (`--features linux`).  It provides direct access to the Linux reference
+/// implementation types.
+#[cfg(all(feature = "linux", not(feature = "freertos")))]
 pub mod os {
     pub use crate::traits::*;
     pub use crate::linux::types as types;

@@ -18,27 +18,8 @@
  *
  ***************************************************************************/
 
-use core::time::Duration;
+//! POSIX backend duration conversions — currently delegates to the Linux
+//! reference implementation.  See `crate::linux::duration` for documentation.
 
-use crate::posix::config::TICK_PERIOD_MS;
-use crate::posix::types::TickType;
-use crate::traits::{FromTick, ToTick};
-
-impl ToTick for Duration {
-    fn to_ticks(&self) -> TickType {
-        let millis = self.as_millis() as TickType;
-        let period = TICK_PERIOD_MS as TickType;
-
-        if period == 0 {
-            TickType::MAX
-        } else {
-            millis / period
-        }
-    }
-}
-
-impl FromTick for Duration {
-    fn ticks(&mut self, tick: TickType) {
-        *self = Duration::from_millis(tick.saturating_mul(TICK_PERIOD_MS as TickType));
-    }
-}
+#[allow(unused_imports)]
+pub(crate) use crate::linux::duration::*;

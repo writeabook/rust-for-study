@@ -18,4 +18,7 @@
  *
  ***************************************************************************/
 
-pub const TICK_PERIOD_MS: u64 = 1;
+//! POSIX backend configuration — currently delegates to the Linux reference
+//! implementation.  See `crate::linux::config` for documentation.
+
+pub use crate::linux::config::*;
