@@ -216,3 +216,82 @@ pub(crate) unsafe fn destroy_sem(ptr: *mut SemT) {
         alloc::alloc::dealloc(ptr as *mut u8, Layout::new::<SemT>());
     }
 }
+
+// ===========================================================================
+// pthread condition variable bindings
+// ===========================================================================
+
+/// Opaque `pthread_cond_t` storage (48 bytes covers all common platforms).
+#[repr(C, align(8))]
+pub(crate) struct PthreadCond {
+    _opaque: [u8; 48],
+}
+
+/// `CLOCK_REALTIME` — used by `pthread_cond_timedwait`.
+pub(crate) const CLOCK_REALTIME: i32 = 0;
+
+unsafe extern "C" {
+    /// `int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr);`
+    pub(crate) fn pthread_cond_init(c: *mut PthreadCond, attr: *const ()) -> i32;
+
+    /// `int pthread_cond_destroy(pthread_cond_t *cond);`
+    pub(crate) fn pthread_cond_destroy(c: *mut PthreadCond) -> i32;
+
+    /// `int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex);`
+    pub(crate) fn pthread_cond_wait(c: *mut PthreadCond, m: *mut PthreadMutex) -> i32;
+
+    /// `int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime);`
+    pub(crate) fn pthread_cond_timedwait(c: *mut PthreadCond, m: *mut PthreadMutex, t: *const Timespec) -> i32;
+
+    /// `int pthread_cond_signal(pthread_cond_t *cond);`
+    pub(crate) fn pthread_cond_signal(c: *mut PthreadCond) -> i32;
+
+    /// `int pthread_cond_broadcast(pthread_cond_t *cond);`
+    pub(crate) fn pthread_cond_broadcast(c: *mut PthreadCond) -> i32;
+
+    /// `int clock_gettime(clockid_t clk_id, struct timespec *tp);`
+    pub(crate) fn clock_gettime(clk_id: i32, tp: *mut Timespec) -> i32;
+}
+
+/// Allocates and initialises a `pthread_cond_t`.
+pub(crate) fn create_cond() -> Option<*mut PthreadCond> {
+    let layout = Layout::new::<PthreadCond>();
+    let ptr = unsafe { alloc::alloc::alloc(layout) as *mut PthreadCond };
+    if ptr.is_null() {
+        return None;
+    }
+    let ret = unsafe { pthread_cond_init(ptr, core::ptr::null()) };
+    if ret == 0 {
+        Some(ptr)
+    } else {
+        unsafe { alloc::alloc::dealloc(ptr as *mut u8, layout) };
+        None
+    }
+}
+
+/// Destroys and deallocates a `pthread_cond_t`.
+pub(crate) unsafe fn destroy_cond(ptr: *mut PthreadCond) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        pthread_cond_destroy(ptr);
+        alloc::alloc::dealloc(ptr as *mut u8, Layout::new::<PthreadCond>());
+    }
+}
+
+/// Returns the current `CLOCK_REALTIME` as a `Timespec`.
+pub(crate) fn realtime_now() -> Timespec {
+    let mut ts = Timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { clock_gettime(CLOCK_REALTIME, &mut ts) };
+    ts
+}
+
+/// Adds `ms` milliseconds to a `Timespec`.
+pub(crate) fn timespec_add_ms(ts: &Timespec, ms: u64) -> Timespec {
+    let total_ns = ts.tv_nsec + (ms as i64).saturating_mul(1_000_000);
+    Timespec {
+        tv_sec: ts.tv_sec + total_ns / 1_000_000_000,
+        tv_nsec: total_ns % 1_000_000_000,
+    }
+}
