@@ -144,3 +144,75 @@ pub(crate) unsafe fn destroy_mutex(ptr: *mut PthreadMutex) {
         alloc::alloc::dealloc(ptr as *mut u8, Layout::new::<PthreadMutex>());
     }
 }
+
+// ===========================================================================
+// POSIX semaphore (sem_t) bindings
+// ===========================================================================
+
+/// Opaque `sem_t` storage.
+///
+/// Sized to 48 bytes to cover all common platforms
+/// (Linux x86_64/aarch64: 32 bytes, macOS: varies).
+#[repr(C, align(8))]
+pub(crate) struct SemT {
+    _opaque: [u8; 48],
+}
+
+/// `struct timespec` for `sem_timedwait`.
+#[repr(C)]
+pub(crate) struct Timespec {
+    pub tv_sec: i64,
+    pub tv_nsec: i64,
+}
+
+unsafe extern "C" {
+    /// `int sem_init(sem_t *sem, int pshared, unsigned int value);`
+    pub(crate) fn sem_init(sem: *mut SemT, pshared: i32, value: u32) -> i32;
+
+    /// `int sem_destroy(sem_t *sem);`
+    pub(crate) fn sem_destroy(sem: *mut SemT) -> i32;
+
+    /// `int sem_wait(sem_t *sem);`
+    pub(crate) fn sem_wait(sem: *mut SemT) -> i32;
+
+    /// `int sem_trywait(sem_t *sem);`
+    pub(crate) fn sem_trywait(sem: *mut SemT) -> i32;
+
+    /// `int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout);`
+    pub(crate) fn sem_timedwait(sem: *mut SemT, abs_timeout: *const Timespec) -> i32;
+
+    /// `int sem_post(sem_t *sem);`
+    pub(crate) fn sem_post(sem: *mut SemT) -> i32;
+
+    /// `int sem_getvalue(sem_t *sem, int *sval);`
+    pub(crate) fn sem_getvalue(sem: *mut SemT, sval: *mut i32) -> i32;
+}
+
+/// Allocates and initialises a `sem_t` with the given initial value.
+///
+/// Uses `sem_init` (process-local, `pshared = 0`).
+pub(crate) fn create_sem(initial_value: u32) -> Option<*mut SemT> {
+    let layout = Layout::new::<SemT>();
+    let ptr = unsafe { alloc::alloc::alloc(layout) as *mut SemT };
+    if ptr.is_null() {
+        return None;
+    }
+    let ret = unsafe { sem_init(ptr, 0, initial_value) };
+    if ret == 0 {
+        Some(ptr)
+    } else {
+        unsafe { alloc::alloc::dealloc(ptr as *mut u8, layout) };
+        None
+    }
+}
+
+/// Destroys and deallocates a `sem_t`.
+pub(crate) unsafe fn destroy_sem(ptr: *mut SemT) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        sem_destroy(ptr);
+        alloc::alloc::dealloc(ptr as *mut u8, Layout::new::<SemT>());
+    }
+}
