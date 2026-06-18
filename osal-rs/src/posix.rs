@@ -69,6 +69,7 @@ pub mod bsp;
 pub mod config;
 pub(crate) mod duration;
 pub mod event_group;
+pub(crate) mod ffi;
 pub mod mutex;
 pub mod queue;
 pub mod semaphore;
