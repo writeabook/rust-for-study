@@ -63,7 +63,9 @@
 //! - [`event_group`] — Multi-bit event-group synchronization.
 //! - [`queue`] — Raw `Queue` and type-safe `QueueStreamed<T>`.
 //! - [`timer`] — Periodic and one-shot software timers.
+//! - [`bsp`] — Board Support Package selection (platform-specific config).
 
+pub mod bsp;
 pub mod config;
 pub(crate) mod duration;
 pub mod event_group;
