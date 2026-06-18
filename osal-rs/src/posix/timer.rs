@@ -18,12 +18,17 @@
  *
  ***************************************************************************/
 
-//! POSIX backend timer — currently delegates to the Linux reference
-//! implementation.  See `crate::linux::timer` for documentation.
+//! POSIX backend timer — delegates to the Linux reference implementation.
+//!
+//! A Timer Service Thread + deadline heap + lazy invalidation implementation
+//! (FreeRTOS Timer Service Task pattern) is under development — see
+//! `refactor/posix-arch` branch history.  The one-shot path works correctly;
+//! periodic auto-reload has a clock-synchronisation issue between
+//! CLOCK_MONOTONIC and pthread_cond_timedwait that needs deeper debugging.
 //!
 //! # Future direction
 //!
-//! This module will be replaced with a native POSIX `timer_create` /
-//! `timer_settime` implementation in a subsequent phase.
+//! Re-visit once the mutex / semaphore / queue native POSIX implementations
+//! are stable and the condvar clock attribute issue is resolved.
 
 pub use crate::linux::timer::*;

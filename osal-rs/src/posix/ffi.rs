@@ -232,7 +232,7 @@ pub(crate) const CLOCK_REALTIME: i32 = 0;
 
 unsafe extern "C" {
     /// `int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr);`
-    pub(crate) fn pthread_cond_init(c: *mut PthreadCond, attr: *const ()) -> i32;
+    pub(crate) fn pthread_cond_init(c: *mut PthreadCond, attr: *const PthreadCondAttr) -> i32;
 
     /// `int pthread_cond_destroy(pthread_cond_t *cond);`
     pub(crate) fn pthread_cond_destroy(c: *mut PthreadCond) -> i32;
@@ -251,6 +251,43 @@ unsafe extern "C" {
 
     /// `int clock_gettime(clockid_t clk_id, struct timespec *tp);`
     pub(crate) fn clock_gettime(clk_id: i32, tp: *mut Timespec) -> i32;
+
+    /// `int pthread_condattr_init(pthread_condattr_t *attr);`
+    pub(crate) fn pthread_condattr_init(attr: *mut PthreadCondAttr) -> i32;
+
+    /// `int pthread_condattr_destroy(pthread_condattr_t *attr);`
+    pub(crate) fn pthread_condattr_destroy(attr: *mut PthreadCondAttr) -> i32;
+
+    /// `int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock_id);`
+    pub(crate) fn pthread_condattr_setclock(attr: *mut PthreadCondAttr, clock_id: i32) -> i32;
+}
+
+/// Opaque `pthread_condattr_t` (8 bytes on most platforms).
+#[repr(C, align(8))]
+pub(crate) struct PthreadCondAttr {
+    _opaque: [u8; 8],
+}
+
+/// Allocates and initialises a `pthread_cond_t` with `CLOCK_MONOTONIC`.
+pub(crate) fn create_cond_monotonic() -> Option<*mut PthreadCond> {
+    let layout = Layout::new::<PthreadCond>();
+    let ptr = unsafe { alloc::alloc::alloc(layout) as *mut PthreadCond };
+    if ptr.is_null() {
+        return None;
+    }
+    let mut attr: PthreadCondAttr = PthreadCondAttr { _opaque: [0u8; 8] };
+    let ok = unsafe { pthread_condattr_init(&mut attr) } == 0
+        && unsafe { pthread_condattr_setclock(&mut attr, CLOCK_MONOTONIC) } == 0;
+    let ret = unsafe { pthread_cond_init(ptr, if ok { &attr } else { core::ptr::null() }) };
+    if ok {
+        unsafe { pthread_condattr_destroy(&mut attr) };
+    }
+    if ret == 0 {
+        Some(ptr)
+    } else {
+        unsafe { alloc::alloc::dealloc(ptr as *mut u8, layout) };
+        None
+    }
 }
 
 /// Allocates and initialises a `pthread_cond_t`.
@@ -287,11 +324,130 @@ pub(crate) fn realtime_now() -> Timespec {
     ts
 }
 
+/// Returns the current `CLOCK_MONOTONIC` as a `Timespec`.
+pub(crate) fn realtime_monotonic() -> Timespec {
+    let mut ts = Timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
+    ts
+}
+
 /// Adds `ms` milliseconds to a `Timespec`.
 pub(crate) fn timespec_add_ms(ts: &Timespec, ms: u64) -> Timespec {
     let total_ns = ts.tv_nsec + (ms as i64).saturating_mul(1_000_000);
     Timespec {
         tv_sec: ts.tv_sec + total_ns / 1_000_000_000,
         tv_nsec: total_ns % 1_000_000_000,
+    }
+}
+
+// ===========================================================================
+// POSIX per-process timer (timer_create / timer_settime / timer_delete)
+// ===========================================================================
+
+use core::ffi::c_void;
+
+/// Opaque `timer_t` — on Linux this is `void*`.
+pub(crate) type TimerT = *mut c_void;
+
+/// `union sigval` — used to pass data to the timer callback.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) union SigVal {
+    pub sival_ptr: *mut c_void,
+    pub sival_int: i32,
+}
+
+/// `SIGEV_THREAD` — notify via a new thread that calls the given function.
+pub(crate) const SIGEV_THREAD: i32 = 2;
+
+/// `CLOCK_MONOTONIC` — monotonic clock, not affected by system time changes.
+pub(crate) const CLOCK_MONOTONIC: i32 = 1;
+
+/// Timer callback trampoline signature: `void (*)(union sigval)`.
+pub(crate) type SigevNotifyFn = unsafe extern "C" fn(SigVal);
+
+/// `struct sigevent` — opaque storage (glibc: 72 bytes on x86_64).
+///
+/// We define this as an opaque byte array because glibc's actual layout
+/// includes a large `__SIZEOF_PTHREAD_ATTR_T`-sized union padding between
+/// `sigev_notify` and the notification-function pointer.
+#[repr(C, align(8))]
+pub(crate) struct SigEvent {
+    _opaque: [u8; 80],
+}
+
+/// `struct itimerspec` — timer period specification.
+#[repr(C)]
+pub(crate) struct ITimerSpec {
+    pub it_interval: Timespec,   // reload period (0 = one-shot)
+    pub it_value: Timespec,      // initial expiration (0 = disarmed)
+}
+
+unsafe extern "C" {
+    /// `int timer_create(clockid_t, struct sigevent *, timer_t *);`
+    pub(crate) fn timer_create(clockid: i32, evp: *mut SigEvent, timerid: *mut TimerT) -> i32;
+
+    /// `int timer_settime(timer_t, int flags, const struct itimerspec *, struct itimerspec *);`
+    pub(crate) fn timer_settime(
+        timerid: TimerT,
+        flags: i32,
+        new_value: *const ITimerSpec,
+        old_value: *mut ITimerSpec,
+    ) -> i32;
+
+    /// `int timer_delete(timer_t);`
+    pub(crate) fn timer_delete(timerid: TimerT) -> i32;
+}
+
+/// Creates a `SigEvent` configured for `SIGEV_THREAD` delivery with the
+/// given trampoline function and argument pointer.
+///
+/// Writes fields at the appropriate offsets inside the opaque struct
+/// so that the layout matches glibc's `struct sigevent` on all platforms.
+pub(crate) fn make_sigevent(func: SigevNotifyFn, arg: *mut c_void) -> SigEvent {
+    let mut ev: SigEvent = SigEvent { _opaque: [0u8; 80] };
+    unsafe {
+        // Offset 0: sigev_value (SigVal = 8 bytes)
+        let value_ptr = ev._opaque.as_mut_ptr() as *mut SigVal;
+        *value_ptr = SigVal { sival_ptr: arg };
+        // Offset 8: sigev_signo (i32)
+        let signo_ptr = ev._opaque.as_mut_ptr().add(8) as *mut i32;
+        *signo_ptr = 0;
+        // Offset 12: sigev_notify (i32)
+        let notify_ptr = ev._opaque.as_mut_ptr().add(12) as *mut i32;
+        *notify_ptr = SIGEV_THREAD;
+        // Offset 16: _sigev_un._sigev_thread._function (function pointer, 8 bytes)
+        let func_ptr = ev._opaque.as_mut_ptr().add(16) as *mut Option<SigevNotifyFn>;
+        *func_ptr = Some(func);
+        // Offset 24: _sigev_un._sigev_thread._attribute (pthread_attr_t*, 8 bytes)
+        let attr_ptr = ev._opaque.as_mut_ptr().add(24) as *mut *mut c_void;
+        *attr_ptr = core::ptr::null_mut();
+    }
+    ev
+}
+
+/// Builds an `ITimerSpec` from a period in milliseconds.
+///
+/// `it_value` is set to `period_ms` (the initial expiration).
+/// `it_interval` is set to `period_ms` if `auto_reload` is true, otherwise 0.
+pub(crate) fn make_itimerspec(period_ms: u64, auto_reload: bool) -> ITimerSpec {
+    let sec = (period_ms / 1000) as i64;
+    let nsec = ((period_ms % 1000) * 1_000_000) as i64;
+    let interval = if auto_reload {
+        Timespec { tv_sec: sec, tv_nsec: nsec }
+    } else {
+        Timespec { tv_sec: 0, tv_nsec: 0 }
+    };
+    ITimerSpec {
+        it_interval: interval,
+        it_value: Timespec { tv_sec: sec, tv_nsec: nsec },
+    }
+}
+
+/// Builds a zero `ITimerSpec` that disarms the timer.
+pub(crate) fn zero_itimerspec() -> ITimerSpec {
+    ITimerSpec {
+        it_interval: Timespec { tv_sec: 0, tv_nsec: 0 },
+        it_value: Timespec { tv_sec: 0, tv_nsec: 0 },
     }
 }
