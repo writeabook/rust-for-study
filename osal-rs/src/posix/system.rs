@@ -57,6 +57,12 @@ fn elapsed_duration() -> Duration {
 
 /// Sleep for `ns` nanoseconds via `nanosleep`, restarting if interrupted by
 /// a signal.
+///
+// TODO(posix): retry only on EINTR once a portable errno helper is added.
+// Currently any non-zero return triggers a retry, which is conservative but
+// may loop on non-EINTR errors.  A proper fix should check `errno` through a
+// platform-correct mechanism (e.g. `libc::__errno_location()` on Linux/glibc,
+// `extern fn __error()` on macOS/BSD).
 fn sleep_ns(mut ns: u64) {
     while ns > 0 {
         let req = clock::ns_to_timespec(ns);
@@ -110,7 +116,7 @@ fn enter_global_critical() -> UBaseType {
 
         if previous_depth == 0 {
             let locked = global_critical_lock().lock();
-            debug_assert!(locked, "failed to lock POSIX critical-section mutex");
+            assert!(locked, "failed to lock POSIX critical-section mutex");
         }
 
         *depth = depth
@@ -137,7 +143,7 @@ fn exit_global_critical() {
 
         if *depth == 0 {
             let unlocked = global_critical_lock().unlock();
-            debug_assert!(unlocked, "failed to unlock POSIX critical-section mutex");
+            assert!(unlocked, "failed to unlock POSIX critical-section mutex");
         }
     })
 }
@@ -210,12 +216,13 @@ impl System {
 
     /// Returns the current OSAL tick count based on `CLOCK_MONOTONIC`.
     ///
-    /// Saturated to [`TickType::MAX`] for very long-running processes.
+    /// Wraps naturally at `TickType::MAX`, matching RTOS tick-count semantics.
+    /// Callers should use `wrapping_sub` to compute elapsed ticks.
     pub fn get_tick_count() -> TickType {
         let elapsed_ms = elapsed_ns() / 1_000_000;
         let ticks = elapsed_ms / TICK_PERIOD_MS;
 
-        ticks.min(TickType::MAX as u64) as TickType
+        ticks as TickType
     }
 
     /// Returns the elapsed monotonic `Duration` since the first OSAL
