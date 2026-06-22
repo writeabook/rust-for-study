@@ -809,8 +809,8 @@ impl ThreadFn for Thread {
             _ => {}
         }
         inner.notification_pending = true;
-        drop(inner);
-        // _g still held; condvar broadcast after drop.
+        // Broadcast while holding the mutex — this is the standard
+        // pattern for PosixCondvar (wake waiters before releasing).
         self.core.condvar.broadcast();
         Ok(())
     }
@@ -964,7 +964,10 @@ impl Debug for Thread {
                 .field("spawn_started", &inner.spawn_started)
                 .field("joined", &inner.joined)
                 .finish();
-            self.core.inner.unlock();
+            assert!(
+                self.core.inner.unlock(),
+                "failed to unlock POSIX thread core mutex"
+            );
             result
         } else {
             f.debug_struct("Thread")
@@ -983,7 +986,10 @@ impl Display for Thread {
                 "Thread {{ id: {}, name: {}, priority: {}, state: {:?}, delete_requested: {} }}",
                 self.core.id, inner.name, inner.priority, inner.state, inner.delete_requested
             );
-            self.core.inner.unlock();
+            assert!(
+                self.core.inner.unlock(),
+                "failed to unlock POSIX thread core mutex"
+            );
             result
         } else {
             write!(f, "Thread {{ id: {}, locked: true }}", self.core.id)
