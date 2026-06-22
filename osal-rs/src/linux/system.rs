@@ -512,6 +512,11 @@ impl System {
     }
 }
 
+// When `posix` is active, the POSIX backend provides its own System
+// implementation and `crate::os::SystemState` resolves to
+// `posix::system::SystemState`.  Avoid a type-mismatch by only compiling
+// this impl for the Linux backend.
+#[cfg(not(feature = "posix"))]
 impl SystemFn for System {
     fn start() {
         Self::start();
