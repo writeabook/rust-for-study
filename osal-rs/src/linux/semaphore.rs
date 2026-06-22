@@ -31,9 +31,9 @@ use core::time::Duration;
 use std::sync::{Condvar, Mutex as StdMutex, MutexGuard as StdMutexGuard, TryLockError};
 use std::time::Instant;
 
+use super::types::{SemaphoreHandle, UBaseType};
 use crate::traits::SemaphoreFn;
 use crate::traits::ToTick;
-use super::types::{SemaphoreHandle, UBaseType};
 use crate::utils::{Error, OsalRsBool, Result};
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,9 @@ unsafe impl Sync for Semaphore {}
 
 impl Deref for Semaphore {
     type Target = SemaphoreHandle;
-    fn deref(&self) -> &Self::Target { &self.handle }
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
 }
 
 impl Semaphore {
@@ -323,9 +325,7 @@ impl Debug for Semaphore {
                     .field("poisoned", &true)
                     .finish()
             }
-            Err(TryLockError::WouldBlock) => {
-                f.debug_struct("Semaphore").finish_non_exhaustive()
-            }
+            Err(TryLockError::WouldBlock) => f.debug_struct("Semaphore").finish_non_exhaustive(),
         }
     }
 }
@@ -376,13 +376,13 @@ mod tests {
         let _ = handle.join();
 
         // After poison: recover_lock is used everywhere, so these must not panic.
-        assert_eq!(sem.wait(Duration::ZERO), OsalRsBool::True);    // count 1→0
-        assert_eq!(sem.wait(Duration::ZERO), OsalRsBool::False);   // count 0
-        assert_eq!(sem.signal(), OsalRsBool::True);                // 0→1
-        assert_eq!(sem.signal(), OsalRsBool::True);                // 1→2
-        assert_eq!(sem.signal(), OsalRsBool::False);               // already max(2)
+        assert_eq!(sem.wait(Duration::ZERO), OsalRsBool::True); // count 1→0
+        assert_eq!(sem.wait(Duration::ZERO), OsalRsBool::False); // count 0
+        assert_eq!(sem.signal(), OsalRsBool::True); // 0→1
+        assert_eq!(sem.signal(), OsalRsBool::True); // 1→2
+        assert_eq!(sem.signal(), OsalRsBool::False); // already max(2)
 
-        assert_eq!(sem.wait_from_isr(), OsalRsBool::True);         // 2→1
-        assert_eq!(sem.signal_from_isr(), OsalRsBool::True);       // 1→2
+        assert_eq!(sem.wait_from_isr(), OsalRsBool::True); // 2→1
+        assert_eq!(sem.signal_from_isr(), OsalRsBool::True); // 1→2
     }
 }

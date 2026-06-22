@@ -138,9 +138,13 @@ fn main() {
     // Tell cargo to rerun this build script if any of these files change.
     // This ensures the generated bindings stay synchronized with the FFI implementation.
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=../osal-rs-build/osal-rs-ffi-freertos/src/osal_rs_ffi_freertos.c");
-    println!("cargo:rerun-if-changed=../osal-rs-build/osal-rs-ffi-freertos/inc/osal_rs_ffi_freertos.h");
-    
+    println!(
+        "cargo:rerun-if-changed=../osal-rs-build/osal-rs-ffi-freertos/src/osal_rs_ffi_freertos.c"
+    );
+    println!(
+        "cargo:rerun-if-changed=../osal-rs-build/osal-rs-ffi-freertos/inc/osal_rs_ffi_freertos.h"
+    );
+
     // Get the workspace root directory by navigating up from the manifest directory.
     // Manifest dir is typically: <workspace>/osal-rs/osal-rs
     // Workspace root is: <workspace>
@@ -150,7 +154,7 @@ fn main() {
         .parent() // Go up to osal-rs/
         .and_then(|p| p.parent()) // Go up to workspace root
         .expect("Failed to find workspace root");
-    
+
     // Determine the path to FreeRTOSConfig.h.
     // Priority: Environment variable > Default location
     let freertos_config = if let Ok(config_path) = env::var("FREERTOS_CONFIG_PATH") {
@@ -160,11 +164,11 @@ fn main() {
         // Default: Look for FreeRTOSConfig.h in <workspace_root>/inc/
         workspace_root.join("inc/FreeRTOSConfig.h")
     };
-    
+
     // Initialize the type generator with the FreeRTOS configuration file path.
     // This will parse FreeRTOSConfig.h and generate Rust type definitions and constants.
     let generator = FreeRtosTypeGenerator::with_config_path(freertos_config);
-    
+
     // Generate all type mappings, configuration constants, and FFI bindings.
     // Generated files are written to the OUT_DIR and included by the main crate.
     generator.generate_all();

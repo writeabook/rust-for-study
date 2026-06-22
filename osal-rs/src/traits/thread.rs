@@ -46,13 +46,13 @@
 //! Higher priority threads preempt lower priority ones. Priority 0 is typically
 //! reserved for the idle task. Use `ToPriority` trait for flexible priority specification.
 
-use core::any::Any;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use core::any::Any;
 
-use crate::os::{ThreadMetadata};
+use crate::os::ThreadMetadata;
 use crate::os::types::{BaseType, TickType, UBaseType};
-use crate::utils::{Result, DoublePtr};
+use crate::utils::{DoublePtr, Result};
 
 /// Type-erased parameter that can be passed to thread callbacks.
 ///
@@ -115,7 +115,8 @@ pub type ThreadParam = Arc<dyn Any + Send + Sync>;
 ///     Ok(Arc::new(0u32))
 /// });
 /// ```
-pub type ThreadFnPtr = dyn Fn(Box<dyn Thread>, Option<ThreadParam>) -> Result<ThreadParam> + Send + Sync + 'static;
+pub type ThreadFnPtr =
+    dyn Fn(Box<dyn Thread>, Option<ThreadParam>) -> Result<ThreadParam> + Send + Sync + 'static;
 
 /// Simple thread function pointer type without parameters.
 ///
@@ -163,18 +164,18 @@ pub type ThreadSimpleFnPtr = dyn Fn() + Send + Sync + 'static;
 ///
 /// ```ignore
 /// use osal_rs::os::{Thread, ThreadNotification};
-/// 
+///
 /// let thread = Thread::current();
-/// 
+///
 /// // Increment notification counter
 /// thread.notify(ThreadNotification::Increment);
-/// 
+///
 /// // Set specific bits (can combine multiple events)
 /// thread.notify(ThreadNotification::SetBits(0b1010));
-/// 
+///
 /// // Set value, overwriting any existing value
 /// thread.notify(ThreadNotification::SetValueWithOverwrite(42));
-/// 
+///
 /// // Set value only if no pending notifications
 /// thread.notify(ThreadNotification::SetValueWithoutOverwrite(100));
 /// ```
@@ -295,7 +296,7 @@ pub trait Thread {
     /// }).unwrap();
     /// ```
     fn spawn<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
-    where 
+    where
         F: Fn(Box<dyn Thread>, Option<ThreadParam>) -> Result<ThreadParam>,
         F: Send + Sync + 'static,
         Self: Sized;
@@ -464,7 +465,7 @@ pub trait Thread {
     /// println!("Running in thread: {}", meta.name);
     /// ```
     fn get_current() -> Self
-    where 
+    where
         Self: Sized;
 
     /// Sends a notification to the thread.
@@ -487,10 +488,10 @@ pub trait Thread {
     /// use osal_rs::os::{Thread, ThreadNotification};
     ///
     /// let worker = get_worker_thread();
-    /// 
+    ///
     /// // Signal an event
     /// worker.notify(ThreadNotification::SetBits(0b0001)).unwrap();
-    /// 
+    ///
     /// // Send a value
     /// worker.notify(ThreadNotification::SetValueWithOverwrite(42)).unwrap();
     /// ```
@@ -528,7 +529,11 @@ pub trait Thread {
     ///     System::yield_from_isr(task_woken);
     /// }
     /// ```
-    fn notify_from_isr(&self, notification: ThreadNotification, higher_priority_task_woken: &mut BaseType) -> Result<()>;
+    fn notify_from_isr(
+        &self,
+        notification: ThreadNotification,
+        higher_priority_task_woken: &mut BaseType,
+    ) -> Result<()>;
 
     /// Waits for a notification.
     ///
@@ -575,9 +580,12 @@ pub trait Thread {
     ///     Err(_) => println!("Timeout"),
     /// }
     /// ```
-    fn wait_notification(&self, bits_to_clear_on_entry: u32, bits_to_clear_on_exit: u32 , timeout_ticks: TickType) -> Result<u32>;
-
-
+    fn wait_notification(
+        &self,
+        bits_to_clear_on_entry: u32,
+        bits_to_clear_on_exit: u32,
+        timeout_ticks: TickType,
+    ) -> Result<u32>;
 }
 
 /// Trait for converting types to thread priority values.

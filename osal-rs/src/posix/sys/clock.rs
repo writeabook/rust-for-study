@@ -1,16 +1,21 @@
 //! CLOCK_MONOTONIC helpers.
 
-use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
+use libc::{CLOCK_MONOTONIC, clock_gettime, timespec};
 
 pub fn now() -> timespec {
-    let mut ts: timespec = timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts: timespec = timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
     ts
 }
 
 pub fn now_ns() -> u64 {
     let ts = now();
-    (ts.tv_sec as u64).saturating_mul(1_000_000_000).saturating_add(ts.tv_nsec as u64)
+    (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64)
 }
 
 pub fn ns_to_timespec(ns: u64) -> timespec {

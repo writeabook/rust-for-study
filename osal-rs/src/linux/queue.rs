@@ -44,10 +44,12 @@ use crate::os::Deserialize;
 use crate::traits::Serialize;
 
 #[cfg(feature = "serde")]
-use osal_rs_serde::{Deserialize, Serialize, from_bytes as serde_from_bytes, to_bytes as serde_to_bytes};
+use osal_rs_serde::{
+    Deserialize, Serialize, from_bytes as serde_from_bytes, to_bytes as serde_to_bytes,
+};
 
-use crate::traits::{BytesHasLen, QueueFn, QueueStreamedFn, ToTick};
 use super::types::{QueueHandle, TickType, UBaseType};
+use crate::traits::{BytesHasLen, QueueFn, QueueStreamedFn, ToTick};
 use crate::utils::{Error, Result};
 
 // ---------------------------------------------------------------------------
@@ -83,7 +85,11 @@ struct QueueInner {
 
 #[inline]
 fn validate_message_size(expected: usize, actual: usize) -> Result<()> {
-    if actual == expected { Ok(()) } else { Err(Error::InvalidMessageSize) }
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(Error::InvalidMessageSize)
+    }
 }
 
 fn recover_lock<T>(result: std::sync::LockResult<T>) -> T {
@@ -97,7 +103,9 @@ static NEXT_QUEUE_HANDLE: AtomicUsize = AtomicUsize::new(1);
 
 fn next_queue_handle() -> QueueHandle {
     NEXT_QUEUE_HANDLE
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| current.checked_add(1))
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
         .expect("Linux queue handle space exhausted") as QueueHandle
 }
 
@@ -117,12 +125,16 @@ unsafe impl Sync for Queue {}
 
 impl Deref for Queue {
     type Target = QueueHandle;
-    fn deref(&self) -> &Self::Target { &self.handle }
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
 }
 
 impl Queue {
     pub fn new(size: UBaseType, message_size: UBaseType) -> Result<Self> {
-        if size == 0 || message_size == 0 { return Err(Error::OutOfMemory); }
+        if size == 0 || message_size == 0 {
+            return Err(Error::OutOfMemory);
+        }
         Ok(Self {
             inner: StdMutex::new(QueueInner {
                 buffer: VecDeque::with_capacity(size as usize),
@@ -142,7 +154,9 @@ impl Queue {
     /// all send/receive operations return [`Error::QueueClosed`].
     pub fn close(&self) {
         let mut state = recover_lock(self.inner.lock());
-        if state.closed { return; }
+        if state.closed {
+            return;
+        }
         state.closed = true;
         state.buffer.clear();
         drop(state);
@@ -179,7 +193,9 @@ impl QueueFn for Queue {
         let mut state = recover_lock(self.inner.lock());
 
         // closed check first
-        if state.closed { return Err(Error::QueueClosed); }
+        if state.closed {
+            return Err(Error::QueueClosed);
+        }
 
         validate_message_size(state.message_size, item.len())?;
 
@@ -191,12 +207,16 @@ impl QueueFn for Queue {
             return Ok(());
         }
 
-        if time == 0 { return Err(Error::Timeout); }
+        if time == 0 {
+            return Err(Error::Timeout);
+        }
 
         // Indefinite wait
         if time == TickType::MAX {
             loop {
-                if state.closed { return Err(Error::QueueClosed); }
+                if state.closed {
+                    return Err(Error::QueueClosed);
+                }
                 if state.buffer.len() < state.capacity {
                     state.buffer.push_back(item.to_vec());
                     drop(state);
@@ -212,7 +232,9 @@ impl QueueFn for Queue {
         let deadline = Instant::now().checked_add(timeout).ok_or(Error::Timeout)?;
 
         loop {
-            if state.closed { return Err(Error::QueueClosed); }
+            if state.closed {
+                return Err(Error::QueueClosed);
+            }
             if state.buffer.len() < state.capacity {
                 state.buffer.push_back(item.to_vec());
                 drop(state);
@@ -221,10 +243,13 @@ impl QueueFn for Queue {
             }
 
             let now = Instant::now();
-            if now >= deadline { return Err(Error::Timeout); }
+            if now >= deadline {
+                return Err(Error::Timeout);
+            }
             let remaining = deadline - now;
 
-            let (next_state, timeout_result) = recover_lock(self.not_full.wait_timeout(state, remaining));
+            let (next_state, timeout_result) =
+                recover_lock(self.not_full.wait_timeout(state, remaining));
             state = next_state;
 
             if timeout_result.timed_out() && state.buffer.len() >= state.capacity && !state.closed {
@@ -236,7 +261,9 @@ impl QueueFn for Queue {
     fn post_from_isr(&self, item: &[u8]) -> Result<()> {
         let mut state = self.try_lock_state()?;
 
-        if state.closed { return Err(Error::QueueClosed); }
+        if state.closed {
+            return Err(Error::QueueClosed);
+        }
 
         validate_message_size(state.message_size, item.len())?;
 
@@ -253,7 +280,9 @@ impl QueueFn for Queue {
     fn fetch(&self, buffer: &mut [u8], time: TickType) -> Result<()> {
         let mut state = recover_lock(self.inner.lock());
 
-        if state.closed { return Err(Error::QueueClosed); }
+        if state.closed {
+            return Err(Error::QueueClosed);
+        }
 
         validate_message_size(state.message_size, buffer.len())?;
 
@@ -266,12 +295,16 @@ impl QueueFn for Queue {
             return Ok(());
         }
 
-        if time == 0 { return Err(Error::Timeout); }
+        if time == 0 {
+            return Err(Error::Timeout);
+        }
 
         // Indefinite wait
         if time == TickType::MAX {
             loop {
-                if state.closed { return Err(Error::QueueClosed); }
+                if state.closed {
+                    return Err(Error::QueueClosed);
+                }
                 if let Some(item) = state.buffer.pop_front() {
                     debug_assert_eq!(item.len(), state.message_size);
                     buffer.copy_from_slice(&item);
@@ -288,7 +321,9 @@ impl QueueFn for Queue {
         let deadline = Instant::now().checked_add(timeout).ok_or(Error::Timeout)?;
 
         loop {
-            if state.closed { return Err(Error::QueueClosed); }
+            if state.closed {
+                return Err(Error::QueueClosed);
+            }
             if let Some(item) = state.buffer.pop_front() {
                 debug_assert_eq!(item.len(), state.message_size);
                 buffer.copy_from_slice(&item);
@@ -298,10 +333,13 @@ impl QueueFn for Queue {
             }
 
             let now = Instant::now();
-            if now >= deadline { return Err(Error::Timeout); }
+            if now >= deadline {
+                return Err(Error::Timeout);
+            }
             let remaining = deadline - now;
 
-            let (next_state, timeout_result) = recover_lock(self.not_empty.wait_timeout(state, remaining));
+            let (next_state, timeout_result) =
+                recover_lock(self.not_empty.wait_timeout(state, remaining));
             state = next_state;
 
             if timeout_result.timed_out() && state.buffer.is_empty() && !state.closed {
@@ -313,7 +351,9 @@ impl QueueFn for Queue {
     fn fetch_from_isr(&self, buffer: &mut [u8]) -> Result<()> {
         let mut state = self.try_lock_state()?;
 
-        if state.closed { return Err(Error::QueueClosed); }
+        if state.closed {
+            return Err(Error::QueueClosed);
+        }
 
         validate_message_size(state.message_size, buffer.len())?;
 
@@ -342,7 +382,8 @@ impl Drop for Queue {
 impl Debug for Queue {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.inner.try_lock() {
-            Ok(state) => f.debug_struct("Queue")
+            Ok(state) => f
+                .debug_struct("Queue")
                 .field("len", &state.buffer.len())
                 .field("capacity", &state.capacity)
                 .field("message_size", &state.message_size)
@@ -356,8 +397,13 @@ impl Debug for Queue {
 impl Display for Queue {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.inner.try_lock() {
-            Ok(state) => write!(f, "Queue {{ len: {}, capacity: {}, msg_size: {} }}",
-                state.buffer.len(), state.capacity, state.message_size),
+            Ok(state) => write!(
+                f,
+                "Queue {{ len: {}, capacity: {}, msg_size: {} }}",
+                state.buffer.len(),
+                state.capacity,
+                state.message_size
+            ),
             Err(_) => write!(f, "Queue {{ <locked> }}"),
         }
     }
@@ -372,7 +418,10 @@ pub struct QueueStreamed<T: StructSerde>(Queue, PhantomData<T>);
 unsafe impl<T: StructSerde> Send for QueueStreamed<T> {}
 unsafe impl<T: StructSerde> Sync for QueueStreamed<T> {}
 
-impl<T> QueueStreamed<T> where T: StructSerde {
+impl<T> QueueStreamed<T>
+where
+    T: StructSerde,
+{
     #[inline]
     pub fn new(size: UBaseType, message_size: UBaseType) -> Result<Self> {
         Ok(Self(Queue::new(size, message_size)?, PhantomData))
@@ -393,16 +442,23 @@ impl<T> QueueStreamed<T> where T: StructSerde {
 
 // Non-serde QueueStreamedFn
 #[cfg(not(feature = "serde"))]
-impl<T> QueueStreamedFn<T> for QueueStreamed<T> where T: StructSerde {
+impl<T> QueueStreamedFn<T> for QueueStreamed<T>
+where
+    T: StructSerde,
+{
     fn post(&self, item: &T, time: TickType) -> Result<()> {
         let bytes = item.to_bytes();
-        if bytes.len() != item.len() { return Err(Error::InvalidMessageSize); }
+        if bytes.len() != item.len() {
+            return Err(Error::InvalidMessageSize);
+        }
         self.0.post(bytes, time)
     }
 
     fn post_from_isr(&self, item: &T) -> Result<()> {
         let bytes = item.to_bytes();
-        if bytes.len() != item.len() { return Err(Error::InvalidMessageSize); }
+        if bytes.len() != item.len() {
+            return Err(Error::InvalidMessageSize);
+        }
         self.0.post_from_isr(bytes)
     }
 
@@ -420,61 +476,94 @@ impl<T> QueueStreamedFn<T> for QueueStreamed<T> where T: StructSerde {
         Ok(())
     }
 
-    fn delete(&mut self) { self.0.delete() }
+    fn delete(&mut self) {
+        self.0.delete()
+    }
 }
 
 // Serde QueueStreamedFn
 #[cfg(feature = "serde")]
-impl<T> QueueStreamedFn<T> for QueueStreamed<T> where T: StructSerde {
+impl<T> QueueStreamedFn<T> for QueueStreamed<T>
+where
+    T: StructSerde,
+{
     fn post(&self, item: &T, time: TickType) -> Result<()> {
         let mut buf_bytes = vec![0u8; item.len()];
-        let written = serde_to_bytes(item, &mut buf_bytes).map_err(|_| Error::Unhandled("Serialization error"))?;
-        if written != buf_bytes.len() { return Err(Error::InvalidMessageSize); }
+        let written = serde_to_bytes(item, &mut buf_bytes)
+            .map_err(|_| Error::Unhandled("Serialization error"))?;
+        if written != buf_bytes.len() {
+            return Err(Error::InvalidMessageSize);
+        }
         self.0.post(&buf_bytes, time)
     }
 
     fn post_from_isr(&self, item: &T) -> Result<()> {
         let mut buf_bytes = vec![0u8; item.len()];
-        let written = serde_to_bytes(item, &mut buf_bytes).map_err(|_| Error::Unhandled("Serialization error"))?;
-        if written != buf_bytes.len() { return Err(Error::InvalidMessageSize); }
+        let written = serde_to_bytes(item, &mut buf_bytes)
+            .map_err(|_| Error::Unhandled("Serialization error"))?;
+        if written != buf_bytes.len() {
+            return Err(Error::InvalidMessageSize);
+        }
         self.0.post_from_isr(&buf_bytes)
     }
 
     fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
         let mut buf_bytes = vec![0u8; buffer.len()];
         self.0.fetch(&mut buf_bytes, time)?;
-        *buffer = serde_from_bytes(&buf_bytes).map_err(|_| Error::Unhandled("Deserialization error"))?;
+        *buffer =
+            serde_from_bytes(&buf_bytes).map_err(|_| Error::Unhandled("Deserialization error"))?;
         Ok(())
     }
 
     fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
         let mut buf_bytes = vec![0u8; buffer.len()];
         self.0.fetch_from_isr(&mut buf_bytes)?;
-        *buffer = serde_from_bytes(&buf_bytes).map_err(|_| Error::Unhandled("Deserialization error"))?;
+        *buffer =
+            serde_from_bytes(&buf_bytes).map_err(|_| Error::Unhandled("Deserialization error"))?;
         Ok(())
     }
 
-    fn delete(&mut self) { self.0.delete() }
-}
-
-// Trait impls
-impl<T> QueueStreamed<T> where T: StructSerde {
-    /// Close the underlying queue (see [`Queue::close`]).
-    pub fn close(&self) { self.0.close(); }
-}
-
-impl<T> Deref for QueueStreamed<T> where T: StructSerde {
-    type Target = Queue;
-    fn deref(&self) -> &Self::Target { &self.0 }
-}
-
-impl<T> Debug for QueueStreamed<T> where T: StructSerde {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("QueueStreamed").field("inner", &self.0).finish()
+    fn delete(&mut self) {
+        self.0.delete()
     }
 }
 
-impl<T> Display for QueueStreamed<T> where T: StructSerde {
+// Trait impls
+impl<T> QueueStreamed<T>
+where
+    T: StructSerde,
+{
+    /// Close the underlying queue (see [`Queue::close`]).
+    pub fn close(&self) {
+        self.0.close();
+    }
+}
+
+impl<T> Deref for QueueStreamed<T>
+where
+    T: StructSerde,
+{
+    type Target = Queue;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> Debug for QueueStreamed<T>
+where
+    T: StructSerde,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("QueueStreamed")
+            .field("inner", &self.0)
+            .finish()
+    }
+}
+
+impl<T> Display for QueueStreamed<T>
+where
+    T: StructSerde,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "QueueStreamed {{ inner: {} }}", self.0)
     }

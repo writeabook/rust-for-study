@@ -20,9 +20,9 @@
 
 extern crate alloc;
 
-use osal_rs::os::*;
-use osal_rs::utils::{Result, OsalRsBool};
 use core::time::Duration;
+use osal_rs::os::*;
+use osal_rs::utils::{OsalRsBool, Result};
 use osal_rs::{log_debug, log_info};
 
 const TAG: &str = "SemaphoreTests";
@@ -46,11 +46,11 @@ pub fn test_semaphore_creation_with_count() -> Result<()> {
 pub fn test_semaphore_signal_wait() -> Result<()> {
     log_info!(TAG, "Starting test_semaphore_signal_wait");
     let semaphore = Semaphore::new(5, 0)?;
-    
+
     let signal_result = semaphore.signal();
     log_debug!(TAG, "Semaphore signal result: {:?}", signal_result);
     assert_eq!(signal_result, OsalRsBool::True);
-    
+
     let wait_result = semaphore.wait(Duration::from_millis(100));
     log_debug!(TAG, "Semaphore wait result: {:?}", wait_result);
     assert_eq!(wait_result, OsalRsBool::True);
@@ -61,7 +61,7 @@ pub fn test_semaphore_signal_wait() -> Result<()> {
 pub fn test_semaphore_wait_timeout() -> Result<()> {
     log_info!(TAG, "Starting test_semaphore_wait_timeout");
     let semaphore = Semaphore::new(5, 0)?;
-    
+
     let wait_result = semaphore.wait(Duration::from_millis(10));
     log_debug!(TAG, "Wait timeout result: {:?}", wait_result);
     assert_eq!(wait_result, OsalRsBool::False);
@@ -72,19 +72,19 @@ pub fn test_semaphore_wait_timeout() -> Result<()> {
 pub fn test_semaphore_multiple_signals() -> Result<()> {
     log_info!(TAG, "Starting test_semaphore_multiple_signals");
     let semaphore = Semaphore::new(10, 0)?;
-    
+
     log_debug!(TAG, "Signaling 5 times...");
     for _ in 0..5 {
         let result = semaphore.signal();
         assert_eq!(result, OsalRsBool::True);
     }
-    
+
     log_debug!(TAG, "Waiting 5 times...");
     for _ in 0..5 {
         let result = semaphore.wait(Duration::from_millis(100));
         assert_eq!(result, OsalRsBool::True);
     }
-    
+
     let result = semaphore.wait(Duration::from_millis(10));
     assert_eq!(result, OsalRsBool::False);
     log_info!(TAG, "test_semaphore_multiple_signals PASSED");
@@ -94,12 +94,12 @@ pub fn test_semaphore_multiple_signals() -> Result<()> {
 pub fn test_semaphore_max_count() -> Result<()> {
     log_info!(TAG, "Starting test_semaphore_max_count");
     let semaphore = Semaphore::new(3, 0)?;
-    
+
     for _ in 0..3 {
         semaphore.signal();
     }
     log_debug!(TAG, "Signaled 3 times (max count)");
-    
+
     for _ in 0..3 {
         let result = semaphore.wait(Duration::from_millis(100));
         assert_eq!(result, OsalRsBool::True);
@@ -111,13 +111,13 @@ pub fn test_semaphore_max_count() -> Result<()> {
 pub fn test_semaphore_initial_count() -> Result<()> {
     log_info!(TAG, "Starting test_semaphore_initial_count");
     let semaphore = Semaphore::new(5, 3)?;
-    
+
     log_debug!(TAG, "Testing initial count of 3...");
     for _ in 0..3 {
         let result = semaphore.wait(Duration::from_millis(100));
         assert_eq!(result, OsalRsBool::True);
     }
-    
+
     let result = semaphore.wait(Duration::from_millis(10));
     assert_eq!(result, OsalRsBool::False);
     log_info!(TAG, "test_semaphore_initial_count PASSED");
@@ -127,16 +127,16 @@ pub fn test_semaphore_initial_count() -> Result<()> {
 pub fn test_semaphore_binary() -> Result<()> {
     log_info!(TAG, "Starting test_semaphore_binary");
     let semaphore = Semaphore::new(1, 1)?;
-    
+
     let result = semaphore.wait(Duration::from_millis(100));
     assert_eq!(result, OsalRsBool::True);
-    
+
     let result = semaphore.wait(Duration::from_millis(10));
     assert_eq!(result, OsalRsBool::False);
-    
+
     log_debug!(TAG, "Signaling binary semaphore...");
     semaphore.signal();
-    
+
     let result = semaphore.wait(Duration::from_millis(100));
     assert_eq!(result, OsalRsBool::True);
     log_info!(TAG, "test_semaphore_binary PASSED");

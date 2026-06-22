@@ -18,8 +18,8 @@
  *
  ***************************************************************************/
 
-use osal_rs::utils::Result;
 use osal_rs::log_info;
+use osal_rs::utils::Result;
 
 const TAG: &str = "FreeRTOSTests";
 
@@ -28,7 +28,7 @@ pub fn run_all_tests() -> Result<()> {
     log_info!(TAG, "\n\n========================================");
     log_info!(TAG, "   Starting FreeRTOS Test Suite");
     log_info!(TAG, "========================================\n");
-    
+
     crate::common::duration_tests::run_all_tests()?;
     crate::common::event_group_tests::run_all_tests()?;
     crate::common::mutex_tests::run_all_tests()?;
@@ -38,7 +38,7 @@ pub fn run_all_tests() -> Result<()> {
     crate::common::thread_tests::run_all_tests()?;
     crate::common::timer_tests::run_all_tests()?;
     crate::common::api_surface::run_all_tests()?;
-    
+
     log_info!(TAG, "\n========================================");
     log_info!(TAG, "   All FreeRTOS Tests PASSED!");
     log_info!(TAG, "========================================\n");

@@ -63,7 +63,6 @@
 
 use crate::os::types::TickType;
 
-
 /// Converts a time value to RTOS ticks.
 ///
 /// This trait is implemented by time types (like `Duration`) to allow
@@ -110,7 +109,7 @@ use crate::os::types::TickType;
 /// delay_for(Duration::from_secs(1));
 /// delay_for(1000u32);  // If u32 implements ToTick
 /// ```
-pub trait ToTick : Sized + Copy {
+pub trait ToTick: Sized + Copy {
     /// Converts this value to RTOS ticks.
     ///
     /// Converts the time value to the equivalent number of system ticks
@@ -141,7 +140,6 @@ pub trait ToTick : Sized + Copy {
     /// ```
     fn to_ticks(&self) -> TickType;
 }
-
 
 /// Converts RTOS ticks to a time value.
 ///

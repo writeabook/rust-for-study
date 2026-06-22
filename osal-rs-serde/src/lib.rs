@@ -172,8 +172,8 @@
 //!     let mut buffer = [0u8; 64];
 //!     let len = to_bytes(&device, &mut buffer).unwrap();
 //!     let decoded: Device = from_bytes(&buffer[..len]).unwrap();
-//!     println!("Device at {}, {}", 
-//!              decoded.location.latitude, 
+//!     println!("Device at {}, {}",
+//!              decoded.location.latitude,
 //!              decoded.location.longitude);
 //! }
 //! ```
@@ -221,8 +221,8 @@
 //!     // Deserialize and check
 //!     let decoded: RobotState = from_bytes(&buffer[..len]).unwrap();
 //!     assert_eq!(state, decoded);
-//!     println!("Battery: {}mV, Temp: {}°C", 
-//!              decoded.battery_voltage, 
+//!     println!("Battery: {}mV, Temp: {}°C",
+//!              decoded.battery_voltage,
 //!              decoded.temperature);
 //! }
 //! ```
@@ -350,18 +350,18 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+mod de;
 mod error;
 mod ser;
-mod de;
 
 use alloc::vec::Vec;
+pub use de::{ByteDeserializer, Deserialize, Deserializer};
 pub use error::{Error, Result};
-pub use ser::{Serialize, Serializer, ByteSerializer};
-pub use de::{Deserialize, Deserializer, ByteDeserializer};
+pub use ser::{ByteSerializer, Serialize, Serializer};
 
 // Re-export derive macros when the derive feature is enabled
 #[cfg(feature = "derive")]
-pub use osal_rs_serde_derive::{Serialize, Deserialize};
+pub use osal_rs_serde_derive::{Deserialize, Serialize};
 
 /// Serialize a value to a byte buffer.
 ///
@@ -377,9 +377,9 @@ pub use osal_rs_serde_derive::{Serialize, Deserialize};
 /// let len = to_bytes(&value, &mut buffer).unwrap();
 /// assert_eq!(len, 4);
 /// ```
-pub fn to_bytes<T>(value: &T, buffer: &mut [u8]) -> Result<usize> 
-where 
-    T: Serialize
+pub fn to_bytes<T>(value: &T, buffer: &mut [u8]) -> Result<usize>
+where
+    T: Serialize,
 {
     let mut serializer = ByteSerializer::new(buffer);
     value.serialize("", &mut serializer)?;
@@ -401,9 +401,9 @@ where
 /// let len = to_dyn_bytes(&value, &mut buffer).unwrap();
 /// assert_eq!(len, 4);
 /// ```
-pub fn to_dyn_bytes<T>(value: &T, buffer: &mut Vec<u8>) -> Result<usize> 
-where 
-    T: Serialize
+pub fn to_dyn_bytes<T>(value: &T, buffer: &mut Vec<u8>) -> Result<usize>
+where
+    T: Serialize,
 {
     let mut serializer = ByteSerializer::new(buffer);
     value.serialize("", &mut serializer)?;
@@ -423,9 +423,9 @@ where
 /// let value: u32 = from_bytes(&buffer).unwrap();
 /// assert_eq!(value, 42);
 /// ```
-pub fn from_bytes<T>(buffer: &[u8]) -> Result<T> 
-where 
-    T: Deserialize
+pub fn from_bytes<T>(buffer: &[u8]) -> Result<T>
+where
+    T: Deserialize,
 {
     let mut deserializer = ByteDeserializer::new(buffer);
     T::deserialize(&mut deserializer, "")
@@ -440,7 +440,7 @@ mod tests {
         let mut buffer = [0u8; 4];
         let len = to_bytes(&42u32, &mut buffer).unwrap();
         assert_eq!(len, 4);
-        
+
         let value: u32 = from_bytes(&buffer).unwrap();
         assert_eq!(value, 42);
     }

@@ -63,9 +63,7 @@ fn duration_to_ticks(duration: Duration) -> TickType {
 
     // Round up so that non-zero sub-tick durations still wait
     // for at least one OSAL tick.
-    let ticks = duration_ns
-        .saturating_add(period_ns - 1)
-        / period_ns;
+    let ticks = duration_ns.saturating_add(period_ns - 1) / period_ns;
 
     ticks.min(TickType::MAX as u128) as TickType
 }

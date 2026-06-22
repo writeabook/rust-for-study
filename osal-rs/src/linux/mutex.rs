@@ -56,9 +56,9 @@ use alloc::sync::Arc;
 use std::sync::{Condvar, Mutex as StdMutex, MutexGuard as StdMutexGuard, TryLockError};
 use std::thread::ThreadId;
 
-use crate::traits::{MutexGuardFn, MutexFn, RawMutexFn};
-use crate::utils::{Error, OsalRsBool, Result};
 use super::types::MutexHandle;
+use crate::traits::{MutexFn, MutexGuardFn, RawMutexFn};
+use crate::utils::{Error, OsalRsBool, Result};
 
 // ---------------------------------------------------------------------------
 // Helpers: recover from a poisoned std::sync::Mutex
@@ -154,23 +154,33 @@ impl Display for RawMutex {
 
 impl RawMutex {
     pub fn new() -> Result<Self> {
-        Ok(Self { inner: StdMutex::new(RawMutexState { owner: None, recursion: 0 }), condvar: Condvar::new(), handle: next_handle() })
+        Ok(Self {
+            inner: StdMutex::new(RawMutexState {
+                owner: None,
+                recursion: 0,
+            }),
+            condvar: Condvar::new(),
+            handle: next_handle(),
+        })
     }
 }
 
 impl Deref for RawMutex {
     type Target = MutexHandle;
-    fn deref(&self) -> &Self::Target { &self.handle }
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
 }
 
 impl RawMutexFn for RawMutex {
-
     fn lock(&self) -> OsalRsBool {
         let mut state = recover_lock(self.inner.lock());
         let current = std::thread::current().id();
         if state.owner == Some(current) {
             match state.recursion.checked_add(1) {
-                Some(next) => { state.recursion = next; }
+                Some(next) => {
+                    state.recursion = next;
+                }
                 None => return OsalRsBool::False,
             }
             OsalRsBool::True
@@ -193,7 +203,9 @@ impl RawMutexFn for RawMutex {
         let current = std::thread::current().id();
         if guard.owner == Some(current) {
             match guard.recursion.checked_add(1) {
-                Some(next) => { guard.recursion = next; }
+                Some(next) => {
+                    guard.recursion = next;
+                }
                 None => return OsalRsBool::False,
             }
             OsalRsBool::True
@@ -209,9 +221,14 @@ impl RawMutexFn for RawMutex {
     fn unlock(&self) -> OsalRsBool {
         let mut state = recover_lock(self.inner.lock());
         let current = std::thread::current().id();
-        if state.owner != Some(current) || state.recursion == 0 { return OsalRsBool::False; }
+        if state.owner != Some(current) || state.recursion == 0 {
+            return OsalRsBool::False;
+        }
         state.recursion -= 1;
-        if state.recursion == 0 { state.owner = None; self.condvar.notify_one(); }
+        if state.recursion == 0 {
+            state.owner = None;
+            self.condvar.notify_one();
+        }
         OsalRsBool::True
     }
 
@@ -222,7 +239,9 @@ impl RawMutexFn for RawMutex {
             Err(TryLockError::WouldBlock) => return OsalRsBool::False,
         };
         let current = std::thread::current().id();
-        if guard.owner != Some(current) || guard.recursion == 0 { return OsalRsBool::False; }
+        if guard.owner != Some(current) || guard.recursion == 0 {
+            return OsalRsBool::False;
+        }
         guard.recursion -= 1;
         if guard.recursion == 0 {
             guard.owner = None;
@@ -250,18 +269,25 @@ unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 
 impl<T: ?Sized> Deref for Mutex<T> {
     type Target = MutexHandle;
-    fn deref(&self) -> &Self::Target { &self.handle }
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
 }
 
 impl<T> Mutex<T> {
     pub fn new(data: T) -> Self {
-        Self { owner: StdMutex::new(None), data: Box::new(StdMutex::new(data)), handle: next_handle() }
+        Self {
+            owner: StdMutex::new(None),
+            data: Box::new(StdMutex::new(data)),
+            handle: next_handle(),
+        }
     }
-    pub fn new_arc(data: T) -> Arc<Self> { Arc::new(Self::new(data)) }
+    pub fn new_arc(data: T) -> Arc<Self> {
+        Arc::new(Self::new(data))
+    }
 }
 
 impl<T: ?Sized> Mutex<T> {
-
     pub fn lock_from_isr_explicit(&self) -> Result<MutexGuardFromIsr<'_, T>> {
         self.lock_from_isr()
     }
@@ -270,14 +296,20 @@ impl<T: ?Sized> Mutex<T> {
         let current = std::thread::current().id();
         {
             let owner = recover_lock(self.owner.lock());
-            if *owner == Some(current) { return Err(Error::MutexLockFailed); }
+            if *owner == Some(current) {
+                return Err(Error::MutexLockFailed);
+            }
         }
         let data_guard = recover_lock(self.data.lock());
         {
             let mut owner = recover_lock(self.owner.lock());
             *owner = Some(current);
         }
-        Ok(MutexGuard { owner: &self.owner, data_guard: Some(data_guard), _thread_id: current })
+        Ok(MutexGuard {
+            owner: &self.owner,
+            data_guard: Some(data_guard),
+            _thread_id: current,
+        })
     }
 
     /// Non-blocking try-lock (ISR emulation).
@@ -301,25 +333,56 @@ impl<T: ?Sized> Mutex<T> {
             let mut owner = match self.owner.try_lock() {
                 Ok(o) => o,
                 Err(TryLockError::Poisoned(p)) => p.into_inner(),
-                Err(TryLockError::WouldBlock) => { drop(data_guard); return Err(Error::MutexLockFailed); }
+                Err(TryLockError::WouldBlock) => {
+                    drop(data_guard);
+                    return Err(Error::MutexLockFailed);
+                }
             };
-            if owner.is_some() { drop(owner); drop(data_guard); return Err(Error::MutexLockFailed); }
+            if owner.is_some() {
+                drop(owner);
+                drop(data_guard);
+                return Err(Error::MutexLockFailed);
+            }
             *owner = Some(current);
         }
 
-        Ok(MutexGuardFromIsr { owner: &self.owner, data_guard: Some(data_guard), _thread_id: current })
+        Ok(MutexGuardFromIsr {
+            owner: &self.owner,
+            data_guard: Some(data_guard),
+            _thread_id: current,
+        })
     }
 }
 
 impl<T: ?Sized> MutexFn<T> for Mutex<T> {
-    type Guard<'a> = MutexGuard<'a, T> where Self: 'a, T: 'a;
-    type GuardFromIsr<'a> = MutexGuardFromIsr<'a, T> where Self: 'a, T: 'a;
+    type Guard<'a>
+        = MutexGuard<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
+    type GuardFromIsr<'a>
+        = MutexGuardFromIsr<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
 
-    fn lock(&self) -> Result<Self::Guard<'_>> { self.lock_inner() }
-    fn lock_from_isr(&self) -> Result<Self::GuardFromIsr<'_>> { self.lock_from_isr_inner() }
+    fn lock(&self) -> Result<Self::Guard<'_>> {
+        self.lock_inner()
+    }
+    fn lock_from_isr(&self) -> Result<Self::GuardFromIsr<'_>> {
+        self.lock_from_isr_inner()
+    }
 
-    fn into_inner(self) -> Result<T> where Self: Sized, T: Sized { Ok(recover_lock(self.data.into_inner())) }
-    fn get_mut(&mut self) -> &mut T { recover_lock(self.data.get_mut()) }
+    fn into_inner(self) -> Result<T>
+    where
+        Self: Sized,
+        T: Sized,
+    {
+        Ok(recover_lock(self.data.into_inner()))
+    }
+    fn get_mut(&mut self) -> &mut T {
+        recover_lock(self.data.get_mut())
+    }
 }
 
 impl<T: ?Sized> Debug for Mutex<T> {
@@ -380,19 +443,33 @@ pub struct MutexGuard<'a, T: ?Sized + 'a> {
 
 impl<'a, T: ?Sized> Deref for MutexGuard<'a, T> {
     type Target = T;
-    fn deref(&self) -> &T { self.data_guard.as_deref().expect("guard already released") }
+    fn deref(&self) -> &T {
+        self.data_guard.as_deref().expect("guard already released")
+    }
 }
 impl<'a, T: ?Sized> DerefMut for MutexGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut T { self.data_guard.as_deref_mut().expect("guard already released") }
+    fn deref_mut(&mut self) -> &mut T {
+        self.data_guard
+            .as_deref_mut()
+            .expect("guard already released")
+    }
 }
 impl<'a, T: ?Sized> Drop for MutexGuard<'a, T> {
     fn drop(&mut self) {
-        { let mut owner = recover_lock(self.owner.lock()); *owner = None; }
+        {
+            let mut owner = recover_lock(self.owner.lock());
+            *owner = None;
+        }
         drop(self.data_guard.take());
     }
 }
 impl<'a, T: ?Sized> MutexGuardFn<'a, T> for MutexGuard<'a, T> {
-    fn update(&mut self, t: &T) where T: Clone { **self = t.clone(); }
+    fn update(&mut self, t: &T)
+    where
+        T: Clone,
+    {
+        **self = t.clone();
+    }
 }
 
 // ===========================================================================
@@ -407,19 +484,33 @@ pub struct MutexGuardFromIsr<'a, T: ?Sized + 'a> {
 
 impl<'a, T: ?Sized> Deref for MutexGuardFromIsr<'a, T> {
     type Target = T;
-    fn deref(&self) -> &T { self.data_guard.as_deref().expect("guard already released") }
+    fn deref(&self) -> &T {
+        self.data_guard.as_deref().expect("guard already released")
+    }
 }
 impl<'a, T: ?Sized> DerefMut for MutexGuardFromIsr<'a, T> {
-    fn deref_mut(&mut self) -> &mut T { self.data_guard.as_deref_mut().expect("guard already released") }
+    fn deref_mut(&mut self) -> &mut T {
+        self.data_guard
+            .as_deref_mut()
+            .expect("guard already released")
+    }
 }
 impl<'a, T: ?Sized> Drop for MutexGuardFromIsr<'a, T> {
     fn drop(&mut self) {
-        { let mut owner = recover_lock(self.owner.lock()); *owner = None; }
+        {
+            let mut owner = recover_lock(self.owner.lock());
+            *owner = None;
+        }
         drop(self.data_guard.take());
     }
 }
 impl<'a, T: ?Sized> MutexGuardFn<'a, T> for MutexGuardFromIsr<'a, T> {
-    fn update(&mut self, t: &T) where T: Clone { **self = t.clone(); }
+    fn update(&mut self, t: &T)
+    where
+        T: Clone,
+    {
+        **self = t.clone();
+    }
 }
 
 // ===========================================================================

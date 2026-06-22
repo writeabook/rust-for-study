@@ -7,21 +7,21 @@
 
 extern crate alloc;
 
-use core::time::Duration;
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
+use core::time::Duration;
 use std::sync::Mutex as StdMutex;
 
-use osal_rs::os::*;
-use osal_rs::os::types::TickType;
-use osal_rs::utils::{Error, Result};
 use osal_rs::log_info;
+use osal_rs::os::types::TickType;
+use osal_rs::os::*;
+use osal_rs::utils::{Error, Result};
 
 #[cfg(not(feature = "serde"))]
-use osal_rs::os::{Serialize as OsalSerialize, Deserialize as OsalDeserialize};
+use osal_rs::os::{Deserialize as OsalDeserialize, Serialize as OsalSerialize};
 
 #[cfg(feature = "serde")]
-use osal_rs_serde::{Serialize as OsalSerialize, Deserialize as OsalDeserialize};
+use osal_rs_serde::{Deserialize as OsalDeserialize, Serialize as OsalSerialize};
 
 use osal_rs::os::BytesHasLen;
 
@@ -33,7 +33,9 @@ const TAG: &str = "LinuxQueueTests";
 
 #[cfg(not(feature = "serde"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TestMessage { bytes: [u8; 6] }
+struct TestMessage {
+    bytes: [u8; 6],
+}
 
 #[cfg(not(feature = "serde"))]
 impl TestMessage {
@@ -43,15 +45,27 @@ impl TestMessage {
         bytes[4..].copy_from_slice(&value.to_le_bytes());
         Self { bytes }
     }
-    fn id(&self) -> u32 { u32::from_le_bytes([self.bytes[0], self.bytes[1], self.bytes[2], self.bytes[3]]) }
-    fn value(&self) -> i16 { i16::from_le_bytes([self.bytes[4], self.bytes[5]]) }
+    fn id(&self) -> u32 {
+        u32::from_le_bytes([self.bytes[0], self.bytes[1], self.bytes[2], self.bytes[3]])
+    }
+    fn value(&self) -> i16 {
+        i16::from_le_bytes([self.bytes[4], self.bytes[5]])
+    }
 }
 
 #[cfg(not(feature = "serde"))]
-impl BytesHasLen for TestMessage { fn len(&self) -> usize { self.bytes.len() } }
+impl BytesHasLen for TestMessage {
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+}
 
 #[cfg(not(feature = "serde"))]
-impl OsalSerialize for TestMessage { fn to_bytes(&self) -> &[u8] { &self.bytes } }
+impl OsalSerialize for TestMessage {
+    fn to_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
 
 #[cfg(not(feature = "serde"))]
 impl OsalDeserialize for TestMessage {
@@ -67,10 +81,17 @@ impl OsalDeserialize for TestMessage {
 
 #[cfg(feature = "serde")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, OsalSerialize, OsalDeserialize)]
-struct SerdeTestMessage { id: u32, value: i16 }
+struct SerdeTestMessage {
+    id: u32,
+    value: i16,
+}
 
 #[cfg(feature = "serde")]
-impl BytesHasLen for SerdeTestMessage { fn len(&self) -> usize { 6 } }
+impl BytesHasLen for SerdeTestMessage {
+    fn len(&self) -> usize {
+        6
+    }
+}
 
 // ===========================================================================
 // Broken test type
@@ -81,10 +102,18 @@ impl BytesHasLen for SerdeTestMessage { fn len(&self) -> usize { 6 } }
 struct BrokenMessage([u8; 8]);
 
 #[cfg(not(feature = "serde"))]
-impl BytesHasLen for BrokenMessage { fn len(&self) -> usize { 6 } }
+impl BytesHasLen for BrokenMessage {
+    fn len(&self) -> usize {
+        6
+    }
+}
 
 #[cfg(not(feature = "serde"))]
-impl OsalSerialize for BrokenMessage { fn to_bytes(&self) -> &[u8] { &self.0 } }
+impl OsalSerialize for BrokenMessage {
+    fn to_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 #[cfg(not(feature = "serde"))]
 impl OsalDeserialize for BrokenMessage {
@@ -133,7 +162,9 @@ pub fn test_queue_multi_producer_consumer() -> Result<()> {
                 match q.fetch(&mut buf, TickType::MAX) {
                     Ok(()) => {
                         let val = u64::from_le_bytes(buf);
-                        if val == STOP { break; }
+                        if val == STOP {
+                            break;
+                        }
                         r.lock().unwrap().insert(val);
                     }
                     Err(Error::QueueClosed) => break,
@@ -143,14 +174,18 @@ pub fn test_queue_multi_producer_consumer() -> Result<()> {
         }));
     }
 
-    for p in producers { p.join().unwrap(); }
+    for p in producers {
+        p.join().unwrap();
+    }
 
     // Send sentinels after producers finish, consumers are already draining
     for _ in 0..CONSUMERS {
         queue.post(&STOP.to_le_bytes(), TickType::MAX)?;
     }
 
-    for c in consumers { c.join().unwrap(); }
+    for c in consumers {
+        c.join().unwrap();
+    }
     queue.close();
 
     let received = received.lock().unwrap();
@@ -158,13 +193,22 @@ pub fn test_queue_multi_producer_consumer() -> Result<()> {
 
     // Verify total
     let expected_total = PRODUCERS * ITERS as usize;
-    assert_eq!(total, expected_total, "expected {} messages, got {}", expected_total, total);
+    assert_eq!(
+        total, expected_total,
+        "expected {} messages, got {}",
+        expected_total, total
+    );
 
     // Verify per-producer each sequence is present (uniqueness)
     for pid in 0..PRODUCERS {
         for seq in 0..ITERS {
             let msg: u64 = ((pid as u64) << 32) | (seq as u64);
-            assert!(received.contains(&msg), "missing message (pid={}, seq={})", pid, seq);
+            assert!(
+                received.contains(&msg),
+                "missing message (pid={}, seq={})",
+                pid,
+                seq
+            );
         }
     }
 
@@ -203,9 +247,7 @@ pub fn test_queue_max_post_woken_by_fetch() -> Result<()> {
     queue.post(&[9, 8, 7, 6], 0)?;
 
     let q = Arc::clone(&queue);
-    let handle = thread::spawn(move || {
-        q.post(&[1, 2, 3, 4], TickType::MAX)
-    });
+    let handle = thread::spawn(move || q.post(&[1, 2, 3, 4], TickType::MAX));
 
     thread::sleep(Duration::from_millis(20));
     let mut buf = [0u8; 4];
@@ -267,7 +309,7 @@ pub fn test_queue_close_wakes_blocked_producer() -> Result<()> {
     let queue = Arc::new(Queue::new(1, 4)?);
     queue.post(&[1u8; 4], 0)?;
     let q = Arc::clone(&queue);
-    let handle = thread::spawn(move || { q.post(&[2u8; 4], TickType::MAX) });
+    let handle = thread::spawn(move || q.post(&[2u8; 4], TickType::MAX));
     thread::sleep(Duration::from_millis(10));
     queue.close();
     assert_eq!(handle.join().unwrap(), Err(Error::QueueClosed));
@@ -291,7 +333,9 @@ pub fn test_queue_all_ops_fail_after_close() -> Result<()> {
 pub fn test_queue_close_idempotent() -> Result<()> {
     log_info!(TAG, "Starting test_queue_close_idempotent");
     let queue = Queue::new(1, 4)?;
-    queue.close(); queue.close(); queue.close();
+    queue.close();
+    queue.close();
+    queue.close();
     assert_eq!(queue.post(&[1u8; 4], 0), Err(Error::QueueClosed));
     log_info!(TAG, "test_queue_close_idempotent PASSED");
     Ok(())
@@ -304,7 +348,10 @@ pub fn test_queue_streamed_closed() -> Result<()> {
     queue.close();
     let msg = TestMessage::new(1, 2);
     assert_eq!(queue.post(&msg, 0), Err(Error::QueueClosed));
-    assert_eq!(queue.fetch(&mut TestMessage::new(0, 0), 0), Err(Error::QueueClosed));
+    assert_eq!(
+        queue.fetch(&mut TestMessage::new(0, 0), 0),
+        Err(Error::QueueClosed)
+    );
     log_info!(TAG, "test_queue_streamed_closed PASSED");
     Ok(())
 }
@@ -350,7 +397,10 @@ pub fn test_queue_post_too_short_rejected() -> Result<()> {
 pub fn test_queue_post_too_long_rejected() -> Result<()> {
     log_info!(TAG, "Starting test_queue_post_too_long_rejected");
     let queue = Queue::new(2, 4)?;
-    assert_eq!(queue.post(&[1, 2, 3, 4, 5], 0), Err(Error::InvalidMessageSize));
+    assert_eq!(
+        queue.post(&[1, 2, 3, 4, 5], 0),
+        Err(Error::InvalidMessageSize)
+    );
     let mut received = [0u8; 4];
     assert_eq!(queue.fetch(&mut received, 0), Err(Error::Timeout));
     log_info!(TAG, "test_queue_post_too_long_rejected PASSED");
@@ -358,14 +408,23 @@ pub fn test_queue_post_too_long_rejected() -> Result<()> {
 }
 
 pub fn test_queue_fetch_buffer_too_short_does_not_consume() -> Result<()> {
-    log_info!(TAG, "Starting test_queue_fetch_buffer_too_short_does_not_consume");
+    log_info!(
+        TAG,
+        "Starting test_queue_fetch_buffer_too_short_does_not_consume"
+    );
     let queue = Queue::new(2, 4)?;
     queue.post(&[10, 20, 30, 40], 0)?;
-    assert_eq!(queue.fetch(&mut [0u8; 3], 0), Err(Error::InvalidMessageSize));
+    assert_eq!(
+        queue.fetch(&mut [0u8; 3], 0),
+        Err(Error::InvalidMessageSize)
+    );
     let mut correct_buf = [0u8; 4];
     queue.fetch(&mut correct_buf, 0)?;
     assert_eq!(correct_buf, [10, 20, 30, 40]);
-    log_info!(TAG, "test_queue_fetch_buffer_too_short_does_not_consume PASSED");
+    log_info!(
+        TAG,
+        "test_queue_fetch_buffer_too_short_does_not_consume PASSED"
+    );
     Ok(())
 }
 
@@ -373,7 +432,10 @@ pub fn test_queue_fetch_buffer_too_long_rejected() -> Result<()> {
     log_info!(TAG, "Starting test_queue_fetch_buffer_too_long_rejected");
     let queue = Queue::new(2, 4)?;
     queue.post(&[1, 2, 3, 4], 0)?;
-    assert_eq!(queue.fetch(&mut [0u8; 5], 0), Err(Error::InvalidMessageSize));
+    assert_eq!(
+        queue.fetch(&mut [0u8; 5], 0),
+        Err(Error::InvalidMessageSize)
+    );
     let mut correct_buf = [0u8; 4];
     queue.fetch(&mut correct_buf, 0)?;
     assert_eq!(correct_buf, [1, 2, 3, 4]);
@@ -394,7 +456,10 @@ pub fn test_queue_isr_post_too_short() -> Result<()> {
 pub fn test_queue_isr_post_too_long() -> Result<()> {
     log_info!(TAG, "Starting test_queue_isr_post_too_long");
     let queue = Queue::new(2, 4)?;
-    assert_eq!(queue.post_from_isr(&[1, 2, 3, 4, 5, 6]), Err(Error::InvalidMessageSize));
+    assert_eq!(
+        queue.post_from_isr(&[1, 2, 3, 4, 5, 6]),
+        Err(Error::InvalidMessageSize)
+    );
     let mut buf = [0u8; 4];
     assert_eq!(queue.fetch_from_isr(&mut buf), Err(Error::Timeout));
     log_info!(TAG, "test_queue_isr_post_too_long PASSED");
@@ -405,7 +470,10 @@ pub fn test_queue_isr_fetch_buffer_too_short() -> Result<()> {
     log_info!(TAG, "Starting test_queue_isr_fetch_buffer_too_short");
     let queue = Queue::new(2, 4)?;
     queue.post_from_isr(&[7, 8, 9, 10])?;
-    assert_eq!(queue.fetch_from_isr(&mut [0u8; 2]), Err(Error::InvalidMessageSize));
+    assert_eq!(
+        queue.fetch_from_isr(&mut [0u8; 2]),
+        Err(Error::InvalidMessageSize)
+    );
     let mut correct_buf = [0u8; 4];
     queue.fetch_from_isr(&mut correct_buf)?;
     assert_eq!(correct_buf, [7, 8, 9, 10]);
@@ -417,7 +485,10 @@ pub fn test_queue_isr_fetch_buffer_too_long() -> Result<()> {
     log_info!(TAG, "Starting test_queue_isr_fetch_buffer_too_long");
     let queue = Queue::new(2, 4)?;
     queue.post_from_isr(&[3, 4, 5, 6])?;
-    assert_eq!(queue.fetch_from_isr(&mut [0u8; 8]), Err(Error::InvalidMessageSize));
+    assert_eq!(
+        queue.fetch_from_isr(&mut [0u8; 8]),
+        Err(Error::InvalidMessageSize)
+    );
     let mut correct_buf = [0u8; 4];
     queue.fetch_from_isr(&mut correct_buf)?;
     assert_eq!(correct_buf, [3, 4, 5, 6]);
@@ -429,7 +500,10 @@ pub fn test_queue_propagates_underlying_error() -> Result<()> {
     log_info!(TAG, "Starting test_queue_propagates_underlying_error");
     let queue = Queue::new(2, 4)?;
     assert_eq!(queue.fetch(&mut [0u8; 4], 0), Err(Error::Timeout));
-    assert_eq!(queue.fetch(&mut [0u8; 8], 0), Err(Error::InvalidMessageSize));
+    assert_eq!(
+        queue.fetch(&mut [0u8; 8], 0),
+        Err(Error::InvalidMessageSize)
+    );
     log_info!(TAG, "test_queue_propagates_underlying_error PASSED");
     Ok(())
 }
@@ -458,7 +532,9 @@ pub fn test_queue_streamed_fifo() -> Result<()> {
     log_info!(TAG, "Starting test_queue_streamed_fifo");
     let queue: QueueStreamed<TestMessage> = QueueStreamed::new(4, 6)?;
     let messages: Vec<_> = (0..4).map(|i| TestMessage::new(i, -(i as i16))).collect();
-    for msg in &messages { queue.post(msg, 0)?; }
+    for msg in &messages {
+        queue.post(msg, 0)?;
+    }
     for expected in &messages {
         let mut received = TestMessage::new(0, 0);
         queue.fetch(&mut received, 0)?;
@@ -472,7 +548,10 @@ pub fn test_queue_streamed_fifo() -> Result<()> {
 pub fn test_queue_streamed_wrong_message_size() -> Result<()> {
     log_info!(TAG, "Starting test_queue_streamed_wrong_message_size");
     let queue: QueueStreamed<TestMessage> = QueueStreamed::new(2, 8)?;
-    assert_eq!(queue.post(&TestMessage::new(1, 2), 0), Err(Error::InvalidMessageSize));
+    assert_eq!(
+        queue.post(&TestMessage::new(1, 2), 0),
+        Err(Error::InvalidMessageSize)
+    );
     log_info!(TAG, "test_queue_streamed_wrong_message_size PASSED");
     Ok(())
 }
@@ -522,8 +601,15 @@ pub fn test_queue_streamed_serde_round_trip() -> Result<()> {
 pub fn test_queue_streamed_serde_fifo() -> Result<()> {
     log_info!(TAG, "Starting test_queue_streamed_serde_fifo");
     let queue: QueueStreamed<SerdeTestMessage> = QueueStreamed::new(4, 6)?;
-    let messages: Vec<_> = (0..4).map(|i| SerdeTestMessage { id: 10 + i, value: (i as i16 * 10) }).collect();
-    for msg in &messages { queue.post(msg, 0)?; }
+    let messages: Vec<_> = (0..4)
+        .map(|i| SerdeTestMessage {
+            id: 10 + i,
+            value: (i as i16 * 10),
+        })
+        .collect();
+    for msg in &messages {
+        queue.post(msg, 0)?;
+    }
     for expected in &messages {
         let mut received = SerdeTestMessage { id: 0, value: 0 };
         queue.fetch(&mut received, 0)?;
@@ -551,7 +637,10 @@ pub fn test_queue_streamed_serde_isr_round_trip() -> Result<()> {
 // ===========================================================================
 
 pub fn run_all_tests() -> Result<()> {
-    log_info!(TAG, "========== Running Linux-Specific Queue Tests ==========");
+    log_info!(
+        TAG,
+        "========== Running Linux-Specific Queue Tests =========="
+    );
 
     // Phase 1: Raw Queue contract
     test_queue_exact_message_size()?;
@@ -587,7 +676,9 @@ pub fn run_all_tests() -> Result<()> {
 
     // QueueStreamed close
     #[cfg(not(feature = "serde"))]
-    { test_queue_streamed_closed()?; }
+    {
+        test_queue_streamed_closed()?;
+    }
 
     // Non-serde QueueStreamed
     #[cfg(not(feature = "serde"))]
@@ -607,6 +698,9 @@ pub fn run_all_tests() -> Result<()> {
         test_queue_streamed_serde_isr_round_trip()?;
     }
 
-    log_info!(TAG, "========== All Linux-Specific Queue Tests PASSED ==========");
+    log_info!(
+        TAG,
+        "========== All Linux-Specific Queue Tests PASSED =========="
+    );
     Ok(())
 }

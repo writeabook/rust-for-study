@@ -27,10 +27,9 @@
 use core::ffi::c_void;
 
 use libc::{
-    pthread_attr_destroy, pthread_attr_init, pthread_attr_setstacksize,
-    pthread_create, pthread_equal, pthread_join, pthread_self,
-    pthread_key_create, pthread_key_delete, pthread_getspecific, pthread_setspecific,
-    pthread_t, pthread_key_t,
+    pthread_attr_destroy, pthread_attr_init, pthread_attr_setstacksize, pthread_create,
+    pthread_equal, pthread_getspecific, pthread_join, pthread_key_create, pthread_key_delete,
+    pthread_key_t, pthread_self, pthread_setspecific, pthread_t,
 };
 
 // ---------------------------------------------------------------------------
@@ -58,9 +57,15 @@ pub unsafe fn create(
     }
 
     if let Some(sz) = stack_size {
-        if sz > 0 && libc::pthread_attr_setstacksize(&mut attr, sz) != 0 {
-            libc::pthread_attr_destroy(&mut attr);
-            return None;
+        if sz > 0 {
+            // Clamp to PTHREAD_STACK_MIN so that the OSAL contract
+            // (stack_depth is advisory, not a hard guarantee) still
+            // holds when tests use artificially small stack values.
+            let clamped = sz.max(libc::PTHREAD_STACK_MIN as usize);
+            if libc::pthread_attr_setstacksize(&mut attr, clamped) != 0 {
+                libc::pthread_attr_destroy(&mut attr);
+                return None;
+            }
         }
     }
 
@@ -70,11 +75,7 @@ pub unsafe fn create(
 
     libc::pthread_attr_destroy(&mut attr);
 
-    if ret == 0 {
-        Some(thread)
-    } else {
-        None
-    }
+    if ret == 0 { Some(thread) } else { None }
 }
 
 /// Waits for `thread` to terminate.
@@ -106,9 +107,7 @@ pub fn equal(a: PosixThread, b: PosixThread) -> bool {
 /// The associated destructor (if any) is called with the stored value when a
 /// thread exits.  Pass `None` if no cleanup is needed.
 #[inline]
-pub fn key_create(
-    destructor: Option<unsafe extern "C" fn(*mut c_void)>,
-) -> Option<pthread_key_t> {
+pub fn key_create(destructor: Option<unsafe extern "C" fn(*mut c_void)>) -> Option<pthread_key_t> {
     let mut key: pthread_key_t = 0;
 
     if unsafe { pthread_key_create(&mut key, destructor) } == 0 {

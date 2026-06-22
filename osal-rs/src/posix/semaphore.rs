@@ -37,18 +37,28 @@ unsafe impl Sync for Semaphore {}
 
 impl Semaphore {
     pub fn new(max_count: UBaseType, initial_count: UBaseType) -> Result<Self> {
-        if initial_count > max_count { return Err(Error::OutOfMemory); }
+        if initial_count > max_count {
+            return Err(Error::OutOfMemory);
+        }
         let mtx = PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).ok_or(Error::OutOfMemory)?;
         let cond = PosixCondvar::new().ok_or(Error::OutOfMemory)?;
         let handle = mtx.raw_ptr() as SemaphoreHandle;
-        Ok(Self { mtx, cond, count: UnsafeCell::new(initial_count), max_count, handle })
+        Ok(Self {
+            mtx,
+            cond,
+            count: UnsafeCell::new(initial_count),
+            max_count,
+            handle,
+        })
     }
 
     pub fn new_with_count(initial_count: UBaseType) -> Result<Self> {
         Self::new(UBaseType::MAX, initial_count)
     }
 
-    fn count(&self) -> &mut u32 { unsafe { &mut *self.count.get() } }
+    fn count(&self) -> &mut u32 {
+        unsafe { &mut *self.count.get() }
+    }
 }
 
 impl SemaphoreFn for Semaphore {
@@ -56,27 +66,53 @@ impl SemaphoreFn for Semaphore {
         let ticks = ticks_to_wait.to_ticks();
         let _ = self.mtx.lock();
 
-        if *self.count() > 0 { *self.count() -= 1; let _ = self.mtx.unlock(); return OsalRsBool::True; }
-        if ticks == 0 { let _ = self.mtx.unlock(); return OsalRsBool::False; }
+        if *self.count() > 0 {
+            *self.count() -= 1;
+            let _ = self.mtx.unlock();
+            return OsalRsBool::True;
+        }
+        if ticks == 0 {
+            let _ = self.mtx.unlock();
+            return OsalRsBool::False;
+        }
 
         if ticks == UBaseType::MAX {
             loop {
                 self.cond.wait(&self.mtx);
-                if *self.count() > 0 { *self.count() -= 1; let _ = self.mtx.unlock(); return OsalRsBool::True; }
+                if *self.count() > 0 {
+                    *self.count() -= 1;
+                    let _ = self.mtx.unlock();
+                    return OsalRsBool::True;
+                }
             }
         }
 
         let deadline = clock::deadline_from_ms(ticks as u64);
         loop {
-            if !self.cond.timedwait(&self.mtx, &deadline) { let _ = self.mtx.unlock(); return OsalRsBool::False; }
-            if *self.count() > 0 { *self.count() -= 1; let _ = self.mtx.unlock(); return OsalRsBool::True; }
+            if !self.cond.timedwait(&self.mtx, &deadline) {
+                let _ = self.mtx.unlock();
+                return OsalRsBool::False;
+            }
+            if *self.count() > 0 {
+                *self.count() -= 1;
+                let _ = self.mtx.unlock();
+                return OsalRsBool::True;
+            }
         }
     }
 
     fn wait_from_isr(&self) -> OsalRsBool {
-        if !self.mtx.try_lock() { return OsalRsBool::False; }
-        if *self.count() > 0 { *self.count() -= 1; let _ = self.mtx.unlock(); OsalRsBool::True }
-        else { let _ = self.mtx.unlock(); OsalRsBool::False }
+        if !self.mtx.try_lock() {
+            return OsalRsBool::False;
+        }
+        if *self.count() > 0 {
+            *self.count() -= 1;
+            let _ = self.mtx.unlock();
+            OsalRsBool::True
+        } else {
+            let _ = self.mtx.unlock();
+            OsalRsBool::False
+        }
     }
 
     fn signal(&self) -> OsalRsBool {
@@ -92,7 +128,9 @@ impl SemaphoreFn for Semaphore {
         }
     }
 
-    fn signal_from_isr(&self) -> OsalRsBool { self.signal() }
+    fn signal_from_isr(&self) -> OsalRsBool {
+        self.signal()
+    }
 
     fn delete(&mut self) {}
 }
@@ -107,7 +145,9 @@ impl Drop for Semaphore {
 
 impl Deref for Semaphore {
     type Target = SemaphoreHandle;
-    fn deref(&self) -> &Self::Target { &self.handle }
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
 }
 
 impl Debug for Semaphore {
@@ -115,7 +155,10 @@ impl Debug for Semaphore {
         let _ = self.mtx.lock();
         let c = *self.count();
         let _ = self.mtx.unlock();
-        f.debug_struct("Semaphore").field("count", &c).field("max", &self.max_count).finish()
+        f.debug_struct("Semaphore")
+            .field("count", &c)
+            .field("max", &self.max_count)
+            .finish()
     }
 }
 impl Display for Semaphore {

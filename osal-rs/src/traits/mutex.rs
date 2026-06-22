@@ -211,20 +211,19 @@ pub trait MutexGuard<'a, T: ?Sized + 'a> {
     /// ```ignore
     /// use osal_rs::os::Mutex;
     /// use osal_rs::traits::MutexGuard;
-    /// 
+    ///
     /// let mutex = Mutex::new(0);
     /// let mut guard = mutex.lock().unwrap();
-    /// 
+    ///
     /// // Update with new value
     /// guard.update(&42);
     /// assert_eq!(*guard, 42);
-    /// 
+    ///
     /// // Lock is automatically released when guard drops
     /// ```
     fn update(&mut self, t: &T)
     where
         T: Clone;
-
 }
 
 /// High-level mutex trait with type-safe data protection.
@@ -259,9 +258,15 @@ pub trait MutexGuard<'a, T: ?Sized + 'a> {
 /// ```
 pub trait Mutex<T: ?Sized> {
     /// The guard type for normal mutex locks
-    type Guard<'a>: MutexGuard<'a, T> where Self: 'a, T: 'a;
+    type Guard<'a>: MutexGuard<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
     /// The guard type for ISR-context mutex locks
-    type GuardFromIsr<'a>: MutexGuard<'a, T> where Self: 'a, T: 'a;
+    type GuardFromIsr<'a>: MutexGuard<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
 
     /// Acquires the mutex, blocking the current task until it is able to do so.
     ///

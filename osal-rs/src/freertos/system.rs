@@ -35,13 +35,18 @@ use alloc::vec::Vec;
 
 use super::ffi::task::{BLOCKED, DELETED, READY, RUNNING, SUSPENDED};
 use super::ffi::{
-    TaskStatus, eTaskGetState, osal_rs_critical_section_enter, osal_rs_critical_section_exit, osal_rs_port_end_switching_isr, osal_rs_port_yield_from_isr, uxTaskGetNumberOfTasks, uxTaskGetSystemState, vTaskDelay, vTaskEndScheduler, vTaskStartScheduler, vTaskSuspendAll, xPortGetFreeHeapSize, xTaskDelayUntil, xTaskGetCurrentTaskHandle, xTaskGetTickCount, xTaskResumeAll, osal_rs_task_enter_critical, osal_rs_task_enter_critical_from_isr, osal_rs_task_exit_critical, osal_rs_task_exit_critical_from_isr
+    TaskStatus, eTaskGetState, osal_rs_critical_section_enter, osal_rs_critical_section_exit,
+    osal_rs_port_end_switching_isr, osal_rs_port_yield_from_isr, osal_rs_task_enter_critical,
+    osal_rs_task_enter_critical_from_isr, osal_rs_task_exit_critical,
+    osal_rs_task_exit_critical_from_isr, uxTaskGetNumberOfTasks, uxTaskGetSystemState, vTaskDelay,
+    vTaskEndScheduler, vTaskStartScheduler, vTaskSuspendAll, xPortGetFreeHeapSize, xTaskDelayUntil,
+    xTaskGetCurrentTaskHandle, xTaskGetTickCount, xTaskResumeAll,
 };
-use super::thread::{ThreadState, ThreadMetadata};
+use super::thread::{ThreadMetadata, ThreadState};
 use super::types::{BaseType, TickType, UBaseType};
 use crate::tick_period_ms;
 use crate::traits::{SystemFn, ToTick};
-use crate::utils::{CpuRegisterSize::*, register_bit_size, OsalRsBool};
+use crate::utils::{CpuRegisterSize::*, OsalRsBool, register_bit_size};
 
 /// Represents a snapshot of the system state including all threads.
 ///
@@ -71,7 +76,7 @@ pub struct SystemState {
     /// List of all thread metadata in the system
     pub tasks: Vec<ThreadMetadata>,
     /// Total runtime counter across all threads (if enabled)
-    pub total_run_time: u32
+    pub total_run_time: u32,
 }
 
 /// Provides access to the task list as a slice.
@@ -192,7 +197,7 @@ impl System {
     /// System::delay_with_to_tick(Duration::from_millis(100));
     /// ```
     #[inline]
-    pub fn delay_with_to_tick(ticks: impl ToTick){
+    pub fn delay_with_to_tick(ticks: impl ToTick) {
         Self::delay(ticks.to_ticks());
     }
 
@@ -218,7 +223,10 @@ impl System {
     /// }
     /// ```
     #[inline]
-    pub fn delay_until_with_to_tick(previous_wake_time: &mut TickType, time_increment: impl ToTick) { 
+    pub fn delay_until_with_to_tick(
+        previous_wake_time: &mut TickType,
+        time_increment: impl ToTick,
+    ) {
         Self::delay_until(previous_wake_time, time_increment.to_ticks());
     }
 }
@@ -367,9 +375,9 @@ impl SystemFn for System {
     /// let uptime = System::get_current_time_us();
     /// println!("System uptime: {:?}", uptime);
     /// ```
-    fn get_current_time_us () -> Duration {
+    fn get_current_time_us() -> Duration {
         let ticks = Self::get_tick_count();
-        Duration::from_millis( 1_000 * ticks as u64 / tick_period_ms!() as u64 )
+        Duration::from_millis(1_000 * ticks as u64 / tick_period_ms!() as u64)
     }
 
     /// Converts a `Duration` to microsecond ticks.
@@ -432,9 +440,9 @@ impl SystemFn for System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// let state = System::get_all_thread();
-    /// 
+    ///
     /// for thread in &state.tasks {
     ///     println!("Thread: {} - Stack remaining: {}",
     ///         thread.name,
@@ -453,25 +461,21 @@ impl SystemFn for System {
                 threads_count as UBaseType,
                 &raw mut total_run_time,
             ) as usize;
-            
+
             // Set the length only after data has been written by FreeRTOS
             threads.set_len(count);
         }
 
-        let tasks = threads.into_iter()
-            .map(|task_status| {
-                ThreadMetadata::from((
-                    task_status.xHandle, 
-                    task_status
-                ))
-            }).collect();
+        let tasks = threads
+            .into_iter()
+            .map(|task_status| ThreadMetadata::from((task_status.xHandle, task_status)))
+            .collect();
 
         SystemState {
             tasks,
-            total_run_time
+            total_run_time,
         }
     }
-
 
     /// Delays the current thread for the specified number of ticks.
     ///
@@ -485,10 +489,10 @@ impl SystemFn for System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// System::delay(100);  // Delay 100 ticks
     /// ```
-    fn delay(ticks: TickType){
+    fn delay(ticks: TickType) {
         unsafe {
             vTaskDelay(ticks);
         }
@@ -508,7 +512,7 @@ impl SystemFn for System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// let mut last_wake = System::get_tick_count();
     /// loop {
     ///     // Periodic task code...
@@ -517,10 +521,7 @@ impl SystemFn for System {
     /// ```
     fn delay_until(previous_wake_time: &mut TickType, time_increment: TickType) {
         unsafe {
-            xTaskDelayUntil(
-                previous_wake_time,
-                time_increment,
-            );
+            xTaskDelayUntil(previous_wake_time, time_increment);
         }
     }
 
@@ -533,7 +534,7 @@ impl SystemFn for System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// System::critical_section_enter();
     /// // Critical code - no task switches or interrupts
     /// System::critical_section_exit();
@@ -543,7 +544,7 @@ impl SystemFn for System {
             osal_rs_critical_section_enter();
         }
     }
-    
+
     /// Exits a critical section.
     ///
     /// Re-enables interrupts or decrements the scheduler lock nesting count.
@@ -556,9 +557,9 @@ impl SystemFn for System {
     fn critical_section_exit() {
         unsafe {
             osal_rs_critical_section_exit();
-        }   
+        }
     }
-    
+
     /// Checks if a timer has elapsed.
     ///
     /// Compares the elapsed time since a timestamp against a target duration,
@@ -579,10 +580,10 @@ impl SystemFn for System {
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
     /// use core::time::Duration;
-    /// 
+    ///
     /// let start = System::get_current_time_us();
     /// let timeout = Duration::from_secs(1);
-    /// 
+    ///
     /// // Later...
     /// if System::check_timer(&start, &timeout).into() {
     ///     println!("Timeout occurred");
@@ -590,7 +591,7 @@ impl SystemFn for System {
     /// ```
     fn check_timer(timestamp: &Duration, time: &Duration) -> OsalRsBool {
         let temp_tick_time = Self::get_current_time_us();
-        
+
         let time_passing = if temp_tick_time >= *timestamp {
             temp_tick_time - *timestamp
         } else {
@@ -649,15 +650,15 @@ impl SystemFn for System {
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
     /// use osal_rs::os::ffi::pdTRUE;
-    /// 
+    ///
     /// // In ISR:
     /// let mut switch_required = pdFALSE;
     /// // ... ISR operations that might require context switch ...
     /// System::end_switching_isr(switch_required);
     /// ```
-    fn end_switching_isr( switch_required: BaseType ) {
+    fn end_switching_isr(switch_required: BaseType) {
         unsafe {
-            osal_rs_port_end_switching_isr( switch_required );
+            osal_rs_port_end_switching_isr(switch_required);
         }
     }
 
@@ -665,14 +666,14 @@ impl SystemFn for System {
     ///
     /// Disables scheduler and interrupts to protect shared resources.
     /// Must be paired with [`exit_critical()`](Self::exit_critical).
-    /// This is the task-level version; for ISR context use 
+    /// This is the task-level version; for ISR context use
     /// [`enter_critical_from_isr()`](Self::enter_critical_from_isr).
     ///
     /// # Examples
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// System::enter_critical();
     /// // Access shared resource safely
     /// System::exit_critical();
@@ -692,7 +693,7 @@ impl SystemFn for System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// System::enter_critical();
     /// // Critical section code
     /// System::exit_critical();
@@ -717,21 +718,19 @@ impl SystemFn for System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// // In an interrupt handler
     /// let saved_status = System::enter_critical_from_isr();
     /// // Critical ISR code
     /// System::exit_critical_from_isr(saved_status);
     /// ```
     fn enter_critical_from_isr() -> UBaseType {
-        unsafe {
-            osal_rs_task_enter_critical_from_isr()
-        }
+        unsafe { osal_rs_task_enter_critical_from_isr() }
     }
 
     /// Exits a critical section from an ISR context.
     ///
-    /// Restores the interrupt mask to the state saved by 
+    /// Restores the interrupt mask to the state saved by
     /// [`enter_critical_from_isr()`](Self::enter_critical_from_isr).
     ///
     /// # Parameters
@@ -742,7 +741,7 @@ impl SystemFn for System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// let saved = System::enter_critical_from_isr();
     /// // Protected ISR operations
     /// System::exit_critical_from_isr(saved);
@@ -752,7 +751,6 @@ impl SystemFn for System {
             osal_rs_task_exit_critical_from_isr(saved_interrupt_status);
         }
     }
-
 
     /// Returns the amount of free heap space.
     ///
@@ -766,15 +764,11 @@ impl SystemFn for System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, SystemFn};
-    /// 
+    ///
     /// let free = System::get_free_heap_size();
     /// println!("Free heap: {} bytes", free);
     /// ```
     fn get_free_heap_size() -> usize {
-        unsafe {
-            xPortGetFreeHeapSize()
-        }
+        unsafe { xPortGetFreeHeapSize() }
     }
-
 }
-

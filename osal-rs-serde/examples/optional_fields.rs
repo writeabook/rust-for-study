@@ -20,15 +20,15 @@
 
 //! Example showing optional fields in derived structures.
 
-use osal_rs_serde::{Serialize, Deserialize, to_bytes, from_bytes};
+use osal_rs_serde::{Deserialize, Serialize, from_bytes, to_bytes};
 
 /// Configuration structure with optional fields
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Config {
     device_id: u32,
-    name: Option<u8>,      // Optional device name code
+    name: Option<u8>, // Optional device name code
     enabled: bool,
-    timeout: Option<u16>,  // Optional timeout in ms
+    timeout: Option<u16>, // Optional timeout in ms
 }
 
 fn main() {
@@ -56,7 +56,7 @@ fn main() {
 
     // Config with partial fields
     println!("\n=== Config with None values ===");
-    
+
     let config_partial = Config {
         device_id: 200,
         name: None,
@@ -77,7 +77,7 @@ fn main() {
 
     // Config with all None
     println!("\n=== Config with all optional None ===");
-    
+
     let config_minimal = Config {
         device_id: 300,
         name: None,
@@ -88,7 +88,10 @@ fn main() {
     println!("Config (minimal): {:?}", config_minimal);
 
     let len = to_bytes(&config_minimal, &mut buffer).unwrap();
-    println!("Serialized {} bytes (notice smaller size due to None values)", len);
+    println!(
+        "Serialized {} bytes (notice smaller size due to None values)",
+        len
+    );
 
     let decoded: Config = from_bytes(&buffer[..len]).unwrap();
     println!("Decoded: {:?}", decoded);

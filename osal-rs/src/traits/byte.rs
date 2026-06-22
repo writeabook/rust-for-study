@@ -66,7 +66,8 @@ pub trait BytesHasLen {
 /// report their size.
 impl<T, const N: usize> BytesHasLen for [T; N]
 where
-    T: Serialize + Sized {
+    T: Serialize + Sized,
+{
     fn len(&self) -> usize {
         N
     }
@@ -87,12 +88,12 @@ where
 ///
 /// ```ignore
 /// use osal_rs::traits::Serialize;
-/// 
+///
 /// struct SensorData {
 ///     temperature: i16,
 ///     humidity: u8,
 /// }
-/// 
+///
 /// impl Serialize for SensorData {
 ///     fn to_bytes(&self) -> &[u8] {
 ///         // Convert struct to bytes
@@ -133,12 +134,12 @@ pub trait Serialize {
 /// ```ignore
 /// use osal_rs::traits::Deserialize;
 /// use osal_rs::utils::Result;
-/// 
+///
 /// struct SensorData {
 ///     temperature: i16,
 ///     humidity: u8,
 /// }
-/// 
+///
 /// impl Deserialize for SensorData {
 ///     fn from_bytes(bytes: &[u8]) -> Result<Self> {
 ///         if bytes.len() < 3 {
@@ -154,7 +155,8 @@ pub trait Serialize {
 #[cfg(not(feature = "serde"))]
 pub trait Deserialize: Sized
 where
-    Self: Sized {
+    Self: Sized,
+{
     /// Creates a new instance from a byte slice.
     ///
     /// # Parameters
@@ -167,6 +169,3 @@ where
     /// * `Err(Error)` - Deserialization failed (invalid data, wrong size, etc.)
     fn from_bytes(bytes: &[u8]) -> Result<Self>;
 }
-
-
-

@@ -18,7 +18,9 @@
  *
  ***************************************************************************/
 
-use osal_rs_serde::{to_bytes, from_bytes, ByteDeserializer, Serializer, Deserializer, Serialize, Deserialize};
+use osal_rs_serde::{
+    ByteDeserializer, Deserialize, Deserializer, Serialize, Serializer, from_bytes, to_bytes,
+};
 
 #[test]
 fn test_u8_serialization() {
@@ -27,7 +29,7 @@ fn test_u8_serialization() {
     let len = to_bytes(&value, &mut buffer).unwrap();
     assert_eq!(len, 1);
     assert_eq!(buffer[0], 42);
-    
+
     let restored: u8 = from_bytes(&buffer).unwrap();
     assert_eq!(restored, 42);
 }
@@ -38,7 +40,7 @@ fn test_i32_serialization() {
     let mut buffer = [0u8; 4];
     let len = to_bytes(&value, &mut buffer).unwrap();
     assert_eq!(len, 4);
-    
+
     let restored: i32 = from_bytes(&buffer).unwrap();
     assert_eq!(restored, -12345);
 }
@@ -46,12 +48,12 @@ fn test_i32_serialization() {
 #[test]
 fn test_bool_serialization() {
     let mut buffer = [0u8; 1];
-    
+
     let len = to_bytes(&true, &mut buffer).unwrap();
     assert_eq!(len, 1);
     let restored: bool = from_bytes(&buffer).unwrap();
     assert_eq!(restored, true);
-    
+
     let len = to_bytes(&false, &mut buffer).unwrap();
     assert_eq!(len, 1);
     let restored: bool = from_bytes(&buffer).unwrap();
@@ -64,7 +66,7 @@ fn test_tuple_serialization() {
     let mut buffer = [0u8; 8];
     let len = to_bytes(&tuple, &mut buffer).unwrap();
     assert_eq!(len, 4); // 2 bytes + 2 bytes
-    
+
     let restored: (u16, u16) = from_bytes(&buffer).unwrap();
     assert_eq!(restored, (100, 200));
 }
@@ -75,7 +77,7 @@ fn test_option_some_serialization() {
     let mut buffer = [0u8; 8];
     let len = to_bytes(&value, &mut buffer).unwrap();
     assert_eq!(len, 5); // 1 byte tag + 4 bytes value
-    
+
     let restored: Option<u32> = from_bytes(&buffer).unwrap();
     assert_eq!(restored, Some(42));
 }
@@ -86,7 +88,7 @@ fn test_option_none_serialization() {
     let mut buffer = [0u8; 8];
     let len = to_bytes(&value, &mut buffer).unwrap();
     assert_eq!(len, 1); // Just the tag
-    
+
     let restored: Option<u32> = from_bytes(&buffer).unwrap();
     assert_eq!(restored, None);
 }
@@ -97,7 +99,7 @@ fn test_array_serialization() {
     let mut buffer = [0u8; 8];
     let len = to_bytes(&array, &mut buffer).unwrap();
     assert_eq!(len, 5);
-    
+
     let restored: [u8; 5] = from_bytes(&buffer).unwrap();
     assert_eq!(restored, [1, 2, 3, 4, 5]);
 }
@@ -108,7 +110,7 @@ fn test_f32_serialization() {
     let mut buffer = [0u8; 4];
     let len = to_bytes(&value, &mut buffer).unwrap();
     assert_eq!(len, 4);
-    
+
     let restored: f32 = from_bytes(&buffer).unwrap();
     assert!((restored - 3.14159).abs() < 0.00001);
 }
@@ -129,7 +131,11 @@ fn test_manual_serialize() {
     }
 
     impl Serialize for Point {
-        fn serialize<S: Serializer>(&self, _name: &str, serializer: &mut S) -> Result<(), S::Error> {
+        fn serialize<S: Serializer>(
+            &self,
+            _name: &str,
+            serializer: &mut S,
+        ) -> Result<(), S::Error> {
             serializer.serialize_i32("x", self.x)?;
             serializer.serialize_i32("y", self.y)?;
             Ok(())
@@ -137,7 +143,10 @@ fn test_manual_serialize() {
     }
 
     impl Deserialize for Point {
-        fn deserialize<D: Deserializer>(deserializer: &mut D, _name: &str) -> Result<Self, D::Error> {
+        fn deserialize<D: Deserializer>(
+            deserializer: &mut D,
+            _name: &str,
+        ) -> Result<Self, D::Error> {
             Ok(Point {
                 x: deserializer.deserialize_i32("x")?,
                 y: deserializer.deserialize_i32("y")?,
@@ -159,10 +168,10 @@ fn test_manual_serialize() {
 fn test_unexpected_eof() {
     let buffer = [1u8, 2]; // Only 2 bytes
     let mut deserializer = ByteDeserializer::new(&buffer);
-    
+
     // Try to read u8 - should succeed
     let _value = deserializer.deserialize_u8("").unwrap();
-    
+
     // Try to read u32 - should fail with UnexpectedEof
     let result = deserializer.deserialize_u32("");
     assert!(result.is_err());
@@ -349,13 +358,19 @@ fn test_derive_nested_arrays_of_structs() {
             Device {
                 id: 1,
                 battery: 95,
-                location: Location { latitude: 45500000, longitude: 9200000 },
+                location: Location {
+                    latitude: 45500000,
+                    longitude: 9200000,
+                },
                 active: true,
             },
             Device {
                 id: 2,
                 battery: 60,
-                location: Location { latitude: 45510000, longitude: 9210000 },
+                location: Location {
+                    latitude: 45510000,
+                    longitude: 9210000,
+                },
                 active: false,
             },
         ],
@@ -394,10 +409,30 @@ fn test_derive_complex_robot_state() {
     let state = RobotState {
         timestamp: 1000000,
         motors: [
-            MotorControl { motor_id: 0, speed: 500, direction: true, current: 1200 },
-            MotorControl { motor_id: 1, speed: 500, direction: true, current: 1150 },
-            MotorControl { motor_id: 2, speed: -300, direction: false, current: 800 },
-            MotorControl { motor_id: 3, speed: -300, direction: false, current: 850 },
+            MotorControl {
+                motor_id: 0,
+                speed: 500,
+                direction: true,
+                current: 1200,
+            },
+            MotorControl {
+                motor_id: 1,
+                speed: 500,
+                direction: true,
+                current: 1150,
+            },
+            MotorControl {
+                motor_id: 2,
+                speed: -300,
+                direction: false,
+                current: 800,
+            },
+            MotorControl {
+                motor_id: 3,
+                speed: -300,
+                direction: false,
+                current: 850,
+            },
         ],
         battery_voltage: 12400,
         temperature: 35,
@@ -420,10 +455,30 @@ fn test_derive_robot_state_with_errors() {
     let error_state = RobotState {
         timestamp: 1001000,
         motors: [
-            MotorControl { motor_id: 0, speed: 0, direction: true, current: 0 },
-            MotorControl { motor_id: 1, speed: 0, direction: true, current: 0 },
-            MotorControl { motor_id: 2, speed: 0, direction: true, current: 0 },
-            MotorControl { motor_id: 3, speed: 0, direction: true, current: 0 },
+            MotorControl {
+                motor_id: 0,
+                speed: 0,
+                direction: true,
+                current: 0,
+            },
+            MotorControl {
+                motor_id: 1,
+                speed: 0,
+                direction: true,
+                current: 0,
+            },
+            MotorControl {
+                motor_id: 2,
+                speed: 0,
+                direction: true,
+                current: 0,
+            },
+            MotorControl {
+                motor_id: 3,
+                speed: 0,
+                direction: true,
+                current: 0,
+            },
         ],
         battery_voltage: 9500,
         temperature: 65,
@@ -461,16 +516,25 @@ fn test_binary_array_of_structs() {
     let config = Config {
         version: 1,
         users: [
-            UserConfig { user_id: 1001, role: 10 },
-            UserConfig { user_id: 2002, role: 20 },
-            UserConfig { user_id: 3003, role: 30 },
+            UserConfig {
+                user_id: 1001,
+                role: 10,
+            },
+            UserConfig {
+                user_id: 2002,
+                role: 20,
+            },
+            UserConfig {
+                user_id: 3003,
+                role: 30,
+            },
         ],
         flags: 0xABCD,
     };
 
     let mut buffer = [0u8; 64];
     let len = to_bytes(&config, &mut buffer).unwrap();
-    
+
     // Expected layout (little-endian):
     // version: 1 byte = 1
     // users[0].user_id: 4 bytes = 1001 (0xE9 0x03 0x00 0x00)
@@ -481,31 +545,31 @@ fn test_binary_array_of_structs() {
     // users[2].role: 1 byte = 30
     // flags: 2 bytes = 0xABCD (0xCD 0xAB)
     // Total: 1 + 15 + 2 = 18 bytes
-    
+
     assert_eq!(len, 18, "Expected 18 bytes, got {}", len);
-    
+
     // Verify version
     assert_eq!(buffer[0], 1);
-    
+
     // Verify first user (offset 1)
     assert_eq!(buffer[1], 0xE9); // 1001 & 0xFF
     assert_eq!(buffer[2], 0x03); // (1001 >> 8) & 0xFF
-    assert_eq!(buffer[5], 10);   // role
-    
+    assert_eq!(buffer[5], 10); // role
+
     // Verify second user (offset 6)
     assert_eq!(buffer[6], 0xD2); // 2002 & 0xFF
     assert_eq!(buffer[7], 0x07); // (2002 >> 8) & 0xFF
-    assert_eq!(buffer[10], 20);  // role
-    
+    assert_eq!(buffer[10], 20); // role
+
     // Verify third user (offset 11)
     assert_eq!(buffer[11], 0xBB); // 3003 & 0xFF
     assert_eq!(buffer[12], 0x0B); // (3003 >> 8) & 0xFF
-    assert_eq!(buffer[15], 30);   // role
-    
+    assert_eq!(buffer[15], 30); // role
+
     // Verify flags (offset 16)
     assert_eq!(buffer[16], 0xCD);
     assert_eq!(buffer[17], 0xAB);
-    
+
     // Deserialize and verify
     let decoded: Config = from_bytes(&buffer[..len]).unwrap();
     assert_eq!(decoded, config);

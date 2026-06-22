@@ -137,4 +137,3 @@ pub type MutexHandle = *const c_void;
 /// }
 /// ```
 pub type EventBits = TickType;
-

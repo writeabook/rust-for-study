@@ -106,8 +106,7 @@ impl EventGroup {
 
     /// Creates a new event group with all bits initially cleared (0).
     pub fn new() -> Result<Self> {
-        let mutex =
-            PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).ok_or(Error::OutOfMemory)?;
+        let mutex = PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).ok_or(Error::OutOfMemory)?;
         let condvar = PosixCondvar::new().ok_or(Error::OutOfMemory)?;
 
         Ok(Self {
@@ -119,11 +118,7 @@ impl EventGroup {
     }
 
     /// Convenience: waits with a `ToTick`-compatible timeout.
-    pub fn wait_with_to_tick(
-        &self,
-        mask: EventBits,
-        timeout_ticks: impl ToTick,
-    ) -> EventBits {
+    pub fn wait_with_to_tick(&self, mask: EventBits, timeout_ticks: impl ToTick) -> EventBits {
         self.wait(mask, timeout_ticks.to_ticks())
     }
 
@@ -147,8 +142,8 @@ impl EventGroup {
 impl EventGroupFn for EventGroup {
     fn set(&self, bits: EventBits) -> EventBits {
         let bits = bits & Self::MAX_MASK;
-        let _guard = EventGroupLockGuard::lock(&self.mutex)
-            .expect("failed to lock POSIX event-group mutex");
+        let _guard =
+            EventGroupLockGuard::lock(&self.mutex).expect("failed to lock POSIX event-group mutex");
 
         let state = self.state_mut();
         *state |= bits as EventGroupState;
@@ -179,8 +174,8 @@ impl EventGroupFn for EventGroup {
     }
 
     fn get(&self) -> EventBits {
-        let _guard = EventGroupLockGuard::lock(&self.mutex)
-            .expect("failed to lock POSIX event-group mutex");
+        let _guard =
+            EventGroupLockGuard::lock(&self.mutex).expect("failed to lock POSIX event-group mutex");
 
         self.current_bits()
     }
@@ -195,8 +190,8 @@ impl EventGroupFn for EventGroup {
 
     fn clear(&self, bits: EventBits) -> EventBits {
         let bits = bits & Self::MAX_MASK;
-        let _guard = EventGroupLockGuard::lock(&self.mutex)
-            .expect("failed to lock POSIX event-group mutex");
+        let _guard =
+            EventGroupLockGuard::lock(&self.mutex).expect("failed to lock POSIX event-group mutex");
 
         let state = self.state_mut();
         *state &= !(bits as EventGroupState);
@@ -220,8 +215,8 @@ impl EventGroupFn for EventGroup {
         let mask = mask & Self::MAX_MASK;
         let mask_state = mask as EventGroupState;
 
-        let _guard = EventGroupLockGuard::lock(&self.mutex)
-            .expect("failed to lock POSIX event-group mutex");
+        let _guard =
+            EventGroupLockGuard::lock(&self.mutex).expect("failed to lock POSIX event-group mutex");
 
         // Empty mask — nothing to wait for.
         if mask == 0 {
@@ -277,10 +272,7 @@ impl Debug for EventGroup {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         if let Some(_guard) = EventGroupLockGuard::try_lock(&self.mutex) {
             f.debug_struct("EventGroup")
-                .field(
-                    "bits",
-                    &format_args!("0x{:08X}", self.current_bits()),
-                )
+                .field("bits", &format_args!("0x{:08X}", self.current_bits()))
                 .field("handle", &self.handle)
                 .finish()
         } else {

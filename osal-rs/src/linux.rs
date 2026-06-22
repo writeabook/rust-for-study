@@ -40,12 +40,12 @@
 //! extensions).
 
 pub mod config;
-pub mod types;
 pub(crate) mod duration;
-pub mod system;
-pub mod mutex;
-pub mod semaphore;
 pub mod event_group;
-pub mod thread;
+pub mod mutex;
 pub mod queue;
+pub mod semaphore;
+pub mod system;
+pub mod thread;
 pub mod timer;
+pub mod types;

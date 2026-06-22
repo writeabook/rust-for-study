@@ -34,7 +34,7 @@ use alloc::vec::Vec;
 
 use libc::PTHREAD_MUTEX_ERRORCHECK;
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
 use super::config::TICK_PERIOD_MS;
@@ -132,8 +132,7 @@ static REGISTRY: OnceLock<RegistryCell> = OnceLock::new();
 
 fn registry() -> &'static RegistryCell {
     REGISTRY.get_or_init(|| RegistryCell {
-        mutex: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK)
-            .expect("POSIX thread registry mutex"),
+        mutex: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).expect("POSIX thread registry mutex"),
         inner: UnsafeCell::new(ThreadRegistry {
             by_handle: BTreeMap::new(),
         }),
@@ -255,9 +254,7 @@ pub(crate) fn current_thread_state() -> ThreadState {
 
 fn current_thread_key() -> libc::pthread_key_t {
     static KEY: OnceLock<libc::pthread_key_t> = OnceLock::new();
-    *KEY.get_or_init(|| {
-        sys_thread::key_create(None).expect("POSIX thread TLS key create")
-    })
+    *KEY.get_or_init(|| sys_thread::key_create(None).expect("POSIX thread TLS key create"))
 }
 
 fn set_current_thread_id(id: usize) {
@@ -290,7 +287,15 @@ pub(crate) fn ensure_main_thread_registered() {
     let id = next_thread_id();
     set_current_thread_id(id);
     let core = MAIN_THREAD_CORE.get_or_init(|| {
-        Arc::new(ThreadCore::new(id, "main", 0, 1))
+        let core = Arc::new(ThreadCore::new(id, "main", 0, 1));
+        // The main/external thread is already running — override the
+        // default Suspended state set by ThreadInner::new.
+        {
+            let _g = core_lock(&core);
+            let inner = unsafe { core_inner_mut(&core) };
+            inner.state = ThreadState::Running;
+        }
+        core
     });
     register_thread(id, core);
 }
@@ -362,10 +367,8 @@ impl ThreadCore {
     fn new(id: usize, name: &str, stack_depth: StackType, priority: UBaseType) -> Self {
         Self {
             id,
-            inner: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK)
-                .expect("POSIX thread core mutex"),
-            condvar: PosixCondvar::new()
-                .expect("POSIX thread core condvar"),
+            inner: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).expect("POSIX thread core mutex"),
+            condvar: PosixCondvar::new().expect("POSIX thread core condvar"),
             state: UnsafeCell::new(ThreadInner::new(id, name, stack_depth, priority)),
         }
     }
@@ -408,10 +411,7 @@ unsafe fn core_inner_mut(core: &ThreadCore) -> &mut ThreadInner {
 
 struct StartContext<F>
 where
-    F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam>
-        + Send
-        + Sync
-        + 'static,
+    F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam> + Send + Sync + 'static,
 {
     id: usize,
     core: Arc<ThreadCore>,
@@ -421,10 +421,7 @@ where
 
 extern "C" fn thread_trampoline<F>(arg: *mut c_void) -> *mut c_void
 where
-    F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam>
-        + Send
-        + Sync
-        + 'static,
+    F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam> + Send + Sync + 'static,
 {
     let StartContext {
         id,
@@ -447,9 +444,7 @@ where
         handle: id as ThreadHandle,
     });
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        callback(boxed_self, param)
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| callback(boxed_self, param)));
 
     // Mark finished.
     {
@@ -587,11 +582,7 @@ impl Thread {
 
     // -- spawn helper ---------------------------------------------------
 
-    fn spawn_inner<F>(
-        &mut self,
-        param: Option<ThreadParam>,
-        callback: F,
-    ) -> Result<Self>
+    fn spawn_inner<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
     where
         F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam>
             + Send
@@ -651,10 +642,11 @@ impl Thread {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let wrapper = move |_t: Box<dyn ThreadFn>, _p: Option<ThreadParam>| -> Result<ThreadParam> {
-            callback();
-            Ok(Arc::new(()))
-        };
+        let wrapper =
+            move |_t: Box<dyn ThreadFn>, _p: Option<ThreadParam>| -> Result<ThreadParam> {
+                callback();
+                Ok(Arc::new(()))
+            };
         self.spawn_inner(None, wrapper)
     }
 }
@@ -664,11 +656,7 @@ impl Thread {
 // ---------------------------------------------------------------------------
 
 impl ThreadFn for Thread {
-    fn spawn<F>(
-        &mut self,
-        param: Option<ThreadParam>,
-        callback: F,
-    ) -> Result<Self>
+    fn spawn<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
     where
         F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam>
             + Send
@@ -827,11 +815,7 @@ impl ThreadFn for Thread {
         Ok(())
     }
 
-    fn notify_from_isr(
-        &self,
-        notification: ThreadNotification,
-        hpw: &mut BaseType,
-    ) -> Result<()> {
+    fn notify_from_isr(&self, notification: ThreadNotification, hpw: &mut BaseType) -> Result<()> {
         // Non-blocking try-lock.
         if !self.core.inner.try_lock() {
             *hpw = 0;
@@ -857,8 +841,7 @@ impl ThreadFn for Thread {
             }
             _ => {}
         }
-        let was_waiting =
-            inner.waiting_notification || inner.state == ThreadState::Blocked;
+        let was_waiting = inner.waiting_notification || inner.state == ThreadState::Blocked;
         inner.notification_pending = true;
         *hpw = if was_waiting { 1 } else { 0 };
         assert!(

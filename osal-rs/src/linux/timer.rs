@@ -46,9 +46,9 @@ use std::sync::{Condvar, Mutex as StdMutex};
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Instant;
 
+use super::types::{TickType, TimerHandle};
 use crate::traits::{TimerFn, TimerFnPtr, TimerParam, ToTick};
 use crate::utils::{Error, OsalRsBool, Result};
-use super::types::{TickType, TimerHandle};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,12 +65,16 @@ static NEXT_TIMER_HANDLE: AtomicUsize = AtomicUsize::new(1);
 
 fn next_timer_handle() -> TimerHandle {
     NEXT_TIMER_HANDLE
-        .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |c| c.checked_add(1))
+        .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |c| {
+            c.checked_add(1)
+        })
         .expect("Linux timer handle space exhausted") as TimerHandle
 }
 
 fn deadline_from_period(period: TickType) -> Option<Instant> {
-    if period == 0 { return None; }
+    if period == 0 {
+        return None;
+    }
     Instant::now().checked_add(Duration::from_millis(period as u64))
 }
 
@@ -159,7 +163,9 @@ fn worker_shutdown(core: &TimerCore) {
 fn shutdown(core: &TimerCore) {
     {
         let mut inner = recover_lock(core.inner.lock());
-        if inner.state == TimerState::Deleted { return; }
+        if inner.state == TimerState::Deleted {
+            return;
+        }
         inner.state = TimerState::Deleted;
         inner.deadline = None;
         bump_generation(&mut inner.generation);
@@ -183,7 +189,9 @@ fn worker_loop(core: Arc<TimerCore>) {
             }
 
             // --- Exit on Deleted ---
-            if inner.state == TimerState::Deleted { return; }
+            if inner.state == TimerState::Deleted {
+                return;
+            }
 
             // --- Armed: wait for deadline or command ---
             if inner.state == TimerState::Armed {
@@ -198,7 +206,9 @@ fn worker_loop(core: Arc<TimerCore>) {
                     inner = next;
 
                     // After wake-up
-                    if inner.state == TimerState::Deleted { return; }
+                    if inner.state == TimerState::Deleted {
+                        return;
+                    }
                     if inner.generation != generation {
                         // A command arrived — re-evaluate state
                         continue;
@@ -235,16 +245,17 @@ fn worker_loop(core: Arc<TimerCore>) {
             core: Arc::clone(&core),
         });
 
-        let callback_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            (cb)(callback_timer, param)
-        }));
+        let callback_result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (cb)(callback_timer, param)));
 
         // --- Post-callback: re-lock and process result ---
         {
             let mut inner = recover_lock(core.inner.lock());
 
             // 1) Deleted after callback started → exit
-            if inner.state == TimerState::Deleted { return; }
+            if inner.state == TimerState::Deleted {
+                return;
+            }
 
             // 2) A command changed state during callback → save new param, don't auto-reload
             let command_changed_state = inner.generation != fired_generation;
@@ -308,7 +319,9 @@ unsafe impl Sync for Timer {}
 
 impl Deref for Timer {
     type Target = TimerHandle;
-    fn deref(&self) -> &Self::Target { &self.core.handle }
+    fn deref(&self) -> &Self::Target {
+        &self.core.handle
+    }
 }
 
 impl Timer {
@@ -374,14 +387,26 @@ impl Timer {
         Self::new(name, period.to_ticks(), auto_reload, param, callback)
     }
 
-    #[inline] pub fn start_with_to_tick(&self, t: impl ToTick) -> OsalRsBool { self.start(t.to_ticks()) }
-    #[inline] pub fn stop_with_to_tick(&self, t: impl ToTick) -> OsalRsBool { self.stop(t.to_ticks()) }
-    #[inline] pub fn reset_with_to_tick(&self, t: impl ToTick) -> OsalRsBool { self.reset(t.to_ticks()) }
+    #[inline]
+    pub fn start_with_to_tick(&self, t: impl ToTick) -> OsalRsBool {
+        self.start(t.to_ticks())
+    }
+    #[inline]
+    pub fn stop_with_to_tick(&self, t: impl ToTick) -> OsalRsBool {
+        self.stop(t.to_ticks())
+    }
+    #[inline]
+    pub fn reset_with_to_tick(&self, t: impl ToTick) -> OsalRsBool {
+        self.reset(t.to_ticks())
+    }
     #[inline]
     pub fn change_period_with_to_tick(&self, p: impl ToTick, w: impl ToTick) -> OsalRsBool {
         self.change_period(p.to_ticks(), w.to_ticks())
     }
-    #[inline] pub fn delete_with_to_tick(&mut self, t: impl ToTick) -> OsalRsBool { self.delete(t.to_ticks()) }
+    #[inline]
+    pub fn delete_with_to_tick(&mut self, t: impl ToTick) -> OsalRsBool {
+        self.delete(t.to_ticks())
+    }
 
     /// Close the timer (wake worker, mark deleted, join).
     /// Used internally by delete and drop.
@@ -397,7 +422,9 @@ impl Timer {
 impl TimerFn for Timer {
     fn start(&self, _ticks_to_wait: TickType) -> OsalRsBool {
         let mut inner = recover_lock(self.core.inner.lock());
-        if inner.state == TimerState::Deleted { return OsalRsBool::False; }
+        if inner.state == TimerState::Deleted {
+            return OsalRsBool::False;
+        }
         let period = inner.period;
         command_arm(&mut inner, period);
         drop(inner);
@@ -407,7 +434,9 @@ impl TimerFn for Timer {
 
     fn stop(&self, _ticks_to_wait: TickType) -> OsalRsBool {
         let mut inner = recover_lock(self.core.inner.lock());
-        if inner.state == TimerState::Deleted { return OsalRsBool::False; }
+        if inner.state == TimerState::Deleted {
+            return OsalRsBool::False;
+        }
         command_stop(&mut inner);
         drop(inner);
         self.core.condvar.notify_all();
@@ -417,7 +446,9 @@ impl TimerFn for Timer {
     fn reset(&self, _ticks_to_wait: TickType) -> OsalRsBool {
         // Atomic: arm with fresh deadline in a single lock acquisition.
         let mut inner = recover_lock(self.core.inner.lock());
-        if inner.state == TimerState::Deleted { return OsalRsBool::False; }
+        if inner.state == TimerState::Deleted {
+            return OsalRsBool::False;
+        }
         let period = inner.period;
         command_arm(&mut inner, period);
         drop(inner);
@@ -426,9 +457,13 @@ impl TimerFn for Timer {
     }
 
     fn change_period(&self, new_period: TickType, _ticks_to_wait: TickType) -> OsalRsBool {
-        if new_period == 0 { return OsalRsBool::False; }
+        if new_period == 0 {
+            return OsalRsBool::False;
+        }
         let mut inner = recover_lock(self.core.inner.lock());
-        if inner.state == TimerState::Deleted { return OsalRsBool::False; }
+        if inner.state == TimerState::Deleted {
+            return OsalRsBool::False;
+        }
         inner.period = new_period;
         // If the timer is already Armed (or Executing), restart with the new
         // period.  If Stopped, only store the period — the timer stays
@@ -450,7 +485,9 @@ impl TimerFn for Timer {
             let inner = recover_lock(self.core.inner.lock());
             inner.state == TimerState::Deleted
         };
-        if was_deleted { return OsalRsBool::False; }
+        if was_deleted {
+            return OsalRsBool::False;
+        }
         self.close();
         OsalRsBool::True
     }
@@ -462,14 +499,21 @@ impl TimerFn for Timer {
 
 impl Clone for Timer {
     fn clone(&self) -> Self {
-        self.core.public_handles.fetch_add(1, AtomicOrdering::Relaxed);
-        Self { core: Arc::clone(&self.core) }
+        self.core
+            .public_handles
+            .fetch_add(1, AtomicOrdering::Relaxed);
+        Self {
+            core: Arc::clone(&self.core),
+        }
     }
 }
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        let prev = self.core.public_handles.fetch_sub(1, AtomicOrdering::AcqRel);
+        let prev = self
+            .core
+            .public_handles
+            .fetch_sub(1, AtomicOrdering::AcqRel);
         if prev == 1 {
             // Last public handle — shut down
             shutdown(&self.core);

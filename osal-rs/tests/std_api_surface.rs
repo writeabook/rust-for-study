@@ -53,7 +53,9 @@ type QueueMessage = [u8; 4];
 fn sample_message() -> QueueMessage {
     #[cfg(not(feature = "serde"))]
     {
-        QueueMessage { bytes: [1, 2, 3, 4] }
+        QueueMessage {
+            bytes: [1, 2, 3, 4],
+        }
     }
 
     #[cfg(feature = "serde")]
@@ -84,20 +86,24 @@ fn std_system_surface_signatures_compile() {
     let _stop: fn() = <System as SystemFn>::stop;
     let _get_tick_count: fn() -> types::TickType = <System as SystemFn>::get_tick_count;
     let _get_current_time_us: fn() -> Duration = <System as SystemFn>::get_current_time_us;
-    let _get_us_from_tick: fn(&Duration) -> types::TickType = <System as SystemFn>::get_us_from_tick;
+    let _get_us_from_tick: fn(&Duration) -> types::TickType =
+        <System as SystemFn>::get_us_from_tick;
     let _count_threads: fn() -> usize = <System as SystemFn>::count_threads;
     let _get_all_thread: fn() -> SystemState = <System as SystemFn>::get_all_thread;
     let _delay: fn(types::TickType) = <System as SystemFn>::delay;
     let _delay_until: fn(&mut types::TickType, types::TickType) = <System as SystemFn>::delay_until;
     let _critical_section_enter: fn() = <System as SystemFn>::critical_section_enter;
     let _critical_section_exit: fn() = <System as SystemFn>::critical_section_exit;
-    let _check_timer: fn(&Duration, &Duration) -> osal_rs::utils::OsalRsBool = <System as SystemFn>::check_timer;
+    let _check_timer: fn(&Duration, &Duration) -> osal_rs::utils::OsalRsBool =
+        <System as SystemFn>::check_timer;
     let _yield_from_isr: fn(types::BaseType) = <System as SystemFn>::yield_from_isr;
     let _end_switching_isr: fn(types::BaseType) = <System as SystemFn>::end_switching_isr;
     let _enter_critical: fn() = <System as SystemFn>::enter_critical;
     let _exit_critical: fn() = <System as SystemFn>::exit_critical;
-    let _enter_critical_from_isr: fn() -> types::UBaseType = <System as SystemFn>::enter_critical_from_isr;
-    let _exit_critical_from_isr: fn(types::UBaseType) = <System as SystemFn>::exit_critical_from_isr;
+    let _enter_critical_from_isr: fn() -> types::UBaseType =
+        <System as SystemFn>::enter_critical_from_isr;
+    let _exit_critical_from_isr: fn(types::UBaseType) =
+        <System as SystemFn>::exit_critical_from_isr;
     let _get_free_heap_size: fn() -> usize = <System as SystemFn>::get_free_heap_size;
 
     System::delay_with_to_tick(Duration::ZERO);
@@ -171,7 +177,9 @@ fn std_backend_exports_core_api_surface() {
     queue.delete();
 
     let message = sample_message();
-    let mut streamed_queue = QueueStreamed::<QueueMessage>::new(2, size_of::<QueueMessage>() as types::UBaseType).unwrap();
+    let mut streamed_queue =
+        QueueStreamed::<QueueMessage>::new(2, size_of::<QueueMessage>() as types::UBaseType)
+            .unwrap();
     let streamed_handle: &types::QueueHandle = &streamed_queue;
     let _ = streamed_handle;
     streamed_queue.post(&message, 0).unwrap();
@@ -198,7 +206,8 @@ fn std_backend_exports_core_api_surface() {
     let handle = dummy_thread_handle();
     let _ = Thread::new_with_handle(handle, "worker", 128, 1).unwrap();
     let _ = Thread::new_with_to_priority("worker", 128, HostPriority(1));
-    let _ = Thread::new_with_handle_and_to_priority(handle, "worker", 128, HostPriority(1)).unwrap();
+    let _ =
+        Thread::new_with_handle_and_to_priority(handle, "worker", 128, HostPriority(1)).unwrap();
     let _ = Thread::get_metadata_from_handle(handle);
 
     let mut thread = Thread::new("worker", 128, 1);
@@ -217,7 +226,10 @@ fn std_backend_exports_core_api_surface() {
     spawned.notify(ThreadNotification::Increment).unwrap();
     let mut higher_priority_task_woken = 0;
     spawned
-        .notify_from_isr(ThreadNotification::SetValueWithOverwrite(7), &mut higher_priority_task_woken)
+        .notify_from_isr(
+            ThreadNotification::SetValueWithOverwrite(7),
+            &mut higher_priority_task_woken,
+        )
         .unwrap();
     let _ = spawned.wait_notification(0, 0, 0);
     let _ = spawned.wait_notification_with_to_tick(0, 0, Duration::ZERO);
@@ -232,13 +244,21 @@ fn std_backend_exports_core_api_surface() {
     let _ = format!("{current:?}");
 
     let timer_param: TimerParam = Arc::new(5u32);
-    let mut timer = Timer::new("timer", 1, false, Some(timer_param.clone()), |_timer, param| {
-        Ok(param.unwrap_or_else(|| Arc::new(0u32) as TimerParam))
-    })
+    let mut timer = Timer::new(
+        "timer",
+        1,
+        false,
+        Some(timer_param.clone()),
+        |_timer, param| Ok(param.unwrap_or_else(|| Arc::new(0u32) as TimerParam)),
+    )
     .unwrap();
-    let _ = Timer::new_with_to_tick("timer", Duration::from_millis(1), true, None, |_timer, param| {
-        Ok(param.unwrap_or_else(|| Arc::new(0u32) as TimerParam))
-    })
+    let _ = Timer::new_with_to_tick(
+        "timer",
+        Duration::from_millis(1),
+        true,
+        None,
+        |_timer, param| Ok(param.unwrap_or_else(|| Arc::new(0u32) as TimerParam)),
+    )
     .unwrap();
     let timer_handle: &types::TimerHandle = &timer;
     let _ = timer_handle;
@@ -287,7 +307,11 @@ fn std_backend_exports_logging_api_surface() {
     let _ = log::get_enable_log();
     let _ = log::is_enabled_log(log_levels::FLAG_INFO);
     let _ = log::get_level_log();
-    log::sys_log("StdApiSurface", log_levels::FLAG_INFO, "logging api surface");
+    log::sys_log(
+        "StdApiSurface",
+        log_levels::FLAG_INFO,
+        "logging api surface",
+    );
 
     osal_rs::print!("std print {}", 1u8);
     osal_rs::println!();

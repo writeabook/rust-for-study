@@ -83,8 +83,6 @@ impl FromTick for Duration {
     ///
     /// * `tick` — OSAL tick count to convert.
     fn ticks(&mut self, tick: TickType) {
-        *self = Duration::from_millis(
-            tick.saturating_mul(TICK_PERIOD_MS as TickType) as u64,
-        );
+        *self = Duration::from_millis(tick.saturating_mul(TICK_PERIOD_MS as TickType) as u64);
     }
 }

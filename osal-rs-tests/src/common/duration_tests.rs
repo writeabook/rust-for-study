@@ -1,8 +1,8 @@
 extern crate alloc;
 
 use core::time::Duration;
-use osal_rs::os::{FromTick, ToTick};
 use osal_rs::os::types::TickType;
+use osal_rs::os::{FromTick, ToTick};
 use osal_rs::utils::Result;
 use osal_rs::{log_debug, log_info};
 
@@ -43,7 +43,13 @@ pub fn test_duration_conversion_roundtrip() -> Result<()> {
     } else {
         converted - original
     };
-    log_debug!(TAG, "Original: {}ms, Converted: {}ms, Diff: {}ms", original.as_millis(), converted.as_millis(), diff.as_millis());
+    log_debug!(
+        TAG,
+        "Original: {}ms, Converted: {}ms, Diff: {}ms",
+        original.as_millis(),
+        converted.as_millis(),
+        diff.as_millis()
+    );
     assert!(diff.as_millis() < 10);
     log_info!(TAG, "test_duration_conversion_roundtrip PASSED");
     Ok(())

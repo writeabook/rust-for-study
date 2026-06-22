@@ -500,7 +500,10 @@ impl System {
     /// registry.
     pub fn get_all_thread() -> SystemState {
         let tasks = super::thread::snapshot_registered_threads();
-        SystemState { tasks, total_run_time: 1 }
+        SystemState {
+            tasks,
+            total_run_time: 1,
+        }
     }
 
     /// Returns the amount of free heap memory.
@@ -614,7 +617,7 @@ impl SystemFn for System {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     /// After the global critical lock is poisoned, subsequent
     /// enter/exit calls should still work without panicking.

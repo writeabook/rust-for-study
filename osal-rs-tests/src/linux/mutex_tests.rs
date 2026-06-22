@@ -67,7 +67,10 @@ pub fn test_mutex_poison_recovery() -> Result<()> {
 
     // After recovery the mutex must still be usable
     let guard = mutex.lock();
-    assert!(guard.is_ok(), "mutex must be lockable after poison recovery");
+    assert!(
+        guard.is_ok(),
+        "mutex must be lockable after poison recovery"
+    );
     assert_eq!(*guard.unwrap(), 0, "guarded data must be intact");
 
     log_info!(TAG, "test_mutex_poison_recovery PASSED");
@@ -134,11 +137,17 @@ pub fn test_raw_mutex_handles_are_unique() -> Result<()> {
 }
 
 pub fn run_all_tests() -> Result<()> {
-    log_info!(TAG, "========== Running Linux-Specific Mutex Tests ==========");
+    log_info!(
+        TAG,
+        "========== Running Linux-Specific Mutex Tests =========="
+    );
     test_mutex_multi_thread_contention()?;
     test_mutex_poison_recovery()?;
     test_mutex_isr_path()?;
     test_raw_mutex_handles_are_unique()?;
-    log_info!(TAG, "========== All Linux-Specific Mutex Tests PASSED ==========");
+    log_info!(
+        TAG,
+        "========== All Linux-Specific Mutex Tests PASSED =========="
+    );
     Ok(())
 }

@@ -20,24 +20,24 @@
 
 //! Complex embedded system example showing robot control state.
 
-use osal_rs_serde::{Serialize, Deserialize, to_bytes, from_bytes};
+use osal_rs_serde::{Deserialize, Serialize, from_bytes, to_bytes};
 
 /// Motor control parameters
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 struct MotorControl {
     motor_id: u8,
-    speed: i16,        // -1000 to 1000
-    direction: bool,   // true = forward, false = reverse
-    current: u16,      // mA
+    speed: i16,      // -1000 to 1000
+    direction: bool, // true = forward, false = reverse
+    current: u16,    // mA
 }
 
 /// Complete robot state
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct RobotState {
     timestamp: u64,
-    motors: [MotorControl; 4],  // 4 motors
-    battery_voltage: u16,        // mV
-    temperature: i8,             // °C
+    motors: [MotorControl; 4], // 4 motors
+    battery_voltage: u16,      // mV
+    temperature: i8,           // °C
     error_flags: u32,
 }
 
@@ -47,12 +47,32 @@ fn main() {
     let state = RobotState {
         timestamp: 1000000,
         motors: [
-            MotorControl { motor_id: 0, speed: 500, direction: true, current: 1200 },
-            MotorControl { motor_id: 1, speed: 500, direction: true, current: 1150 },
-            MotorControl { motor_id: 2, speed: -300, direction: false, current: 800 },
-            MotorControl { motor_id: 3, speed: -300, direction: false, current: 850 },
+            MotorControl {
+                motor_id: 0,
+                speed: 500,
+                direction: true,
+                current: 1200,
+            },
+            MotorControl {
+                motor_id: 1,
+                speed: 500,
+                direction: true,
+                current: 1150,
+            },
+            MotorControl {
+                motor_id: 2,
+                speed: -300,
+                direction: false,
+                current: 800,
+            },
+            MotorControl {
+                motor_id: 3,
+                speed: -300,
+                direction: false,
+                current: 850,
+            },
         ],
-        battery_voltage: 12400,  // 12.4V
+        battery_voltage: 12400, // 12.4V
         temperature: 35,
         error_flags: 0,
     };
@@ -64,11 +84,13 @@ fn main() {
     println!("  Error flags: 0x{:08X}", state.error_flags);
     println!("\n  Motors:");
     for motor in &state.motors {
-        println!("    Motor {}: speed={:5}, dir={}, current={}mA",
-                 motor.motor_id,
-                 motor.speed,
-                 if motor.direction { "FWD" } else { "REV" },
-                 motor.current);
+        println!(
+            "    Motor {}: speed={:5}, dir={}, current={}mA",
+            motor.motor_id,
+            motor.speed,
+            if motor.direction { "FWD" } else { "REV" },
+            motor.current
+        );
     }
 
     let mut buffer = [0u8; 256];
@@ -90,27 +112,50 @@ fn main() {
     println!("\nDecoded Robot State:");
     println!("  Battery: {:.2}V", decoded.battery_voltage as f32 / 1000.0);
     println!("  Temperature: {}°C", decoded.temperature);
-    
+
     assert_eq!(state, decoded);
 
     // Simulate error condition
     println!("\n=== Robot with error condition ===");
-    
+
     let error_state = RobotState {
         timestamp: 1001000,
         motors: [
-            MotorControl { motor_id: 0, speed: 0, direction: true, current: 0 },
-            MotorControl { motor_id: 1, speed: 0, direction: true, current: 0 },
-            MotorControl { motor_id: 2, speed: 0, direction: true, current: 0 },
-            MotorControl { motor_id: 3, speed: 0, direction: true, current: 0 },
+            MotorControl {
+                motor_id: 0,
+                speed: 0,
+                direction: true,
+                current: 0,
+            },
+            MotorControl {
+                motor_id: 1,
+                speed: 0,
+                direction: true,
+                current: 0,
+            },
+            MotorControl {
+                motor_id: 2,
+                speed: 0,
+                direction: true,
+                current: 0,
+            },
+            MotorControl {
+                motor_id: 3,
+                speed: 0,
+                direction: true,
+                current: 0,
+            },
         ],
-        battery_voltage: 9500,   // Low battery!
+        battery_voltage: 9500,    // Low battery!
         temperature: 65,          // High temperature!
         error_flags: 0x0000_0101, // Battery low + temperature high
     };
 
     println!("Error State:");
-    println!("  Battery: {:.2}V (LOW!)", error_state.battery_voltage as f32 / 1000.0);
+    println!(
+        "  Battery: {:.2}V (LOW!)",
+        error_state.battery_voltage as f32 / 1000.0
+    );
     println!("  Temperature: {}°C (HIGH!)", error_state.temperature);
     println!("  Error flags: 0x{:08X}", error_state.error_flags);
     if error_state.error_flags & 0x01 != 0 {

@@ -36,11 +36,10 @@
 //! }
 //! ```
 
-
 use proc_macro::TokenStream;
-use quote::quote;
 use proc_macro2::Literal;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use quote::quote;
+use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
 /// Derive macro for the `Serialize` trait.
 ///
@@ -59,7 +58,6 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 pub fn derive_serialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-
 
     let serialize_impl = match &input.data {
         Data::Struct(data_struct) => match &data_struct.fields {
@@ -118,18 +116,15 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
         Data::Enum(_) => {
             return syn::Error::new_spanned(
                 name,
-                "Serialize derive macro does not support enums yet"
+                "Serialize derive macro does not support enums yet",
             )
             .to_compile_error()
             .into();
         }
         Data::Union(_) => {
-            return syn::Error::new_spanned(
-                name,
-                "Serialize derive macro does not support unions"
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(name, "Serialize derive macro does not support unions")
+                .to_compile_error()
+                .into();
         }
     };
 
@@ -205,7 +200,7 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
         Data::Enum(_) => {
             return syn::Error::new_spanned(
                 name,
-                "Deserialize derive macro does not support enums yet"
+                "Deserialize derive macro does not support enums yet",
             )
             .to_compile_error()
             .into();
@@ -213,7 +208,7 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
         Data::Union(_) => {
             return syn::Error::new_spanned(
                 name,
-                "Deserialize derive macro does not support unions"
+                "Deserialize derive macro does not support unions",
             )
             .to_compile_error()
             .into();

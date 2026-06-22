@@ -20,7 +20,7 @@
 
 //! Basic example showing manual implementation of Serialize and Deserialize traits.
 
-use osal_rs_serde::{Serialize, Deserialize, Serializer, Deserializer, to_bytes, from_bytes};
+use osal_rs_serde::{Deserialize, Deserializer, Serialize, Serializer, from_bytes, to_bytes};
 
 /// A simple 2D point structure
 struct Point {
@@ -65,41 +65,46 @@ fn main() {
 
     // Test with primitive types
     println!("\n=== Primitive Types ===");
-    
+
     let value = 12345u32;
     let mut buffer = [0u8; 4];
     let len = to_bytes(&value, &mut buffer).unwrap();
-    println!("u32 {} serialized to {} bytes: {:?}", value, len, &buffer[..len]);
-    
+    println!(
+        "u32 {} serialized to {} bytes: {:?}",
+        value,
+        len,
+        &buffer[..len]
+    );
+
     let restored: u32 = from_bytes(&buffer[..len]).unwrap();
     println!("Restored u32: {}", restored);
 
     // Test with tuples
     println!("\n=== Tuples ===");
-    
+
     let tuple = (100u16, 200u16);
     let mut buffer = [0u8; 8];
     let len = to_bytes(&tuple, &mut buffer).unwrap();
     println!("Tuple {:?} serialized to {} bytes", tuple, len);
-    
+
     let restored: (u16, u16) = from_bytes(&buffer[..len]).unwrap();
     println!("Restored tuple: {:?}", restored);
 
     // Test with Option
     println!("\n=== Option ===");
-    
+
     let some_value: Option<i32> = Some(42);
     let mut buffer = [0u8; 8];
     let len = to_bytes(&some_value, &mut buffer).unwrap();
     println!("Some(42) serialized to {} bytes", len);
-    
+
     let restored: Option<i32> = from_bytes(&buffer[..len]).unwrap();
     println!("Restored: {:?}", restored);
 
     let none_value: Option<i32> = None;
     let len = to_bytes(&none_value, &mut buffer).unwrap();
     println!("None serialized to {} bytes", len);
-    
+
     let restored: Option<i32> = from_bytes(&buffer[..len]).unwrap();
     println!("Restored: {:?}", restored);
 

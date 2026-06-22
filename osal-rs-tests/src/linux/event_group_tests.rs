@@ -5,8 +5,8 @@
 //! non-blocking ISR paths, infinite wait, reserved-bit masking,
 //! and signal-wake semantics.
 
-use osal_rs::os::*;
 use osal_rs::os::types::TickType;
+use osal_rs::os::*;
 use osal_rs::utils::Result;
 
 /// Entry-point called from `mod.rs` to run all Linux-specific

@@ -484,7 +484,7 @@ impl Display for EventGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     /// After the internal mutex is poisoned, subsequent operations should
     /// still work without panicking.

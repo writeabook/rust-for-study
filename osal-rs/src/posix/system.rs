@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::time::Duration;
 
-use libc::{nanosleep, PTHREAD_MUTEX_RECURSIVE};
+use libc::{PTHREAD_MUTEX_RECURSIVE, nanosleep};
 
 use std::sync::OnceLock;
 

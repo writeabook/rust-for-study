@@ -38,7 +38,7 @@
 //!
 //! ```ignore
 //! use osal_rs::{log_info, log_error, log_debug};
-//! 
+//!
 //! log_info!("APP", "Application started");
 //! log_debug!("APP", "Counter value: {}", 42);
 //! log_error!("APP", "Failed to initialize: {}", error_msg);
@@ -48,13 +48,13 @@
 //!
 //! ```ignore
 //! use osal_rs::log::*;
-//! 
+//!
 //! // Set log level to WARNING and above
 //! set_level_log(log_levels::LEVEL_WARNING);
-//! 
+//!
 //! // Enable/disable logging
 //! set_enable_log(true);
-//! 
+//!
 //! // Enable/disable color output
 //! set_enable_color(true);
 //! ```
@@ -63,7 +63,7 @@
 //!
 //! ```ignore
 //! use osal_rs::{print, println};
-//! 
+//!
 //! print!("Hello");
 //! println!(" World!");
 //! println!("Value: {}", 123);
@@ -80,7 +80,7 @@
 //! # ISR Context
 //!
 //! **WARNING**: Do not use logging macros from interrupt service routines (ISRs).
-//! 
+//!
 //! Reasons:
 //! - Busy-wait lock can cause priority inversion
 //! - String formatting allocates memory
@@ -138,7 +138,7 @@ pub mod ffi {
     //! - Outputs to UART hardware
     //! - Is thread-safe (or only called from synchronized contexts)
     //! - Returns number of characters written, or negative on error
-    
+
     use core::ffi::{c_char, c_int};
 
     unsafe extern "C" {
@@ -226,32 +226,32 @@ pub mod log_levels {
     ///
     /// Use for detailed debugging information during development.
     pub const FLAG_DEBUG: u8 = 1 << 0;
-    
+
     /// Flag for INFO level messages (bit 1).
     ///
     /// Use for informational messages about normal operation.
     pub const FLAG_INFO: u8 = 1 << 1;
-    
+
     /// Flag for WARNING level messages (bit 2).
     ///
     /// Use for potentially problematic situations that don't prevent operation.
     pub const FLAG_WARNING: u8 = 1 << 2;
-    
+
     /// Flag for ERROR level messages (bit 3).
     ///
     /// Use for errors that affect functionality but allow continued operation.
     pub const FLAG_ERROR: u8 = 1 << 3;
-    
+
     /// Flag for FATAL level messages (bit 4, most severe).
     ///
     /// Use for critical errors that prevent continued operation.
     pub const FLAG_FATAL: u8 = 1 << 4;
-    
+
     /// Flag to enable color output (bit 6).
     ///
     /// When set, log messages are color-coded by severity level.
     pub const FLAG_COLOR_ON: u8 = 1 << 6;
-    
+
     /// Flag to enable/disable logging entirely (bit 7).
     ///
     /// When clear, all logging is disabled for zero runtime cost.
@@ -261,17 +261,17 @@ pub mod log_levels {
     ///
     /// Most verbose setting, suitable for development and troubleshooting.
     pub const LEVEL_DEBUG: u8 = FLAG_DEBUG | FLAG_INFO | FLAG_WARNING | FLAG_ERROR | FLAG_FATAL;
-    
+
     /// INFO level: Shows INFO and above (INFO, WARNING, ERROR, FATAL).
     ///
     /// Filters out DEBUG messages, suitable for normal operation.
     pub const LEVEL_INFO: u8 = FLAG_INFO | FLAG_WARNING | FLAG_ERROR | FLAG_FATAL;
-    
+
     /// WARNING level: Shows WARNING and above (WARNING, ERROR, FATAL).
     ///
     /// Shows only warnings and errors, suitable for production.
     pub const LEVEL_WARNING: u8 = FLAG_WARNING | FLAG_ERROR | FLAG_FATAL;
-    
+
     /// ERROR level: Shows ERROR and FATAL only.
     ///
     /// Shows only errors and critical failures.
@@ -304,7 +304,8 @@ pub mod log_levels {
 /// simple bit operations that are effectively atomic on most platforms.
 /// Race conditions during initialization are unlikely to cause issues
 /// beyond temporarily incorrect filter settings.
-static mut MASK: u8 = log_levels::LEVEL_DEBUG | log_levels::FLAG_COLOR_ON | log_levels::FLAG_STATE_ON;
+static mut MASK: u8 =
+    log_levels::LEVEL_DEBUG | log_levels::FLAG_COLOR_ON | log_levels::FLAG_STATE_ON;
 
 /// Simple busy flag for thread-safe logging (0 = free, non-zero = busy).
 ///
@@ -339,7 +340,7 @@ static mut BUSY: u8 = 0;
 ///
 /// ```ignore
 /// use osal_rs::print;
-/// 
+///
 /// print!("Hello");
 /// print!(" World: {}", 42);
 /// ```
@@ -358,7 +359,7 @@ macro_rules! print {
 ///
 /// ```ignore
 /// use osal_rs::println;
-/// 
+///
 /// println!("Hello World");
 /// println!("Value: {}", 42);
 /// println!();  // Just a newline
@@ -419,17 +420,16 @@ pub fn print_newline() {
 ///
 /// ```ignore
 /// use osal_rs::log::*;
-/// 
+///
 /// // Show only warnings and errors
 /// set_level_log(log_levels::LEVEL_WARNING);
-/// 
+///
 /// // Show all messages
 /// set_level_log(log_levels::LEVEL_DEBUG);
 /// ```
 pub fn set_level_log(level: u8) {
     unsafe {
-        MASK =
-            (MASK & log_levels::FLAG_STATE_ON) | (level & !log_levels::FLAG_STATE_ON);
+        MASK = (MASK & log_levels::FLAG_STATE_ON) | (level & !log_levels::FLAG_STATE_ON);
     }
 }
 
@@ -445,7 +445,7 @@ pub fn set_level_log(level: u8) {
 ///
 /// ```ignore
 /// use osal_rs::log::set_enable_log;
-/// 
+///
 /// set_enable_log(false);  // Disable all logging
 /// // ... logs will not be printed ...
 /// set_enable_log(true);   // Re-enable logging
@@ -470,7 +470,7 @@ pub fn set_enable_log(enabled: bool) {
 ///
 /// ```ignore
 /// use osal_rs::log::get_enable_log;
-/// 
+///
 /// if get_enable_log() {
 ///     println!("Logging is active");
 /// }
@@ -493,7 +493,7 @@ pub fn get_enable_log() -> bool {
 ///
 /// ```ignore
 /// use osal_rs::log::*;
-/// 
+///
 /// if is_enabled_log(log_levels::FLAG_DEBUG) {
 ///     // Debug logging is active
 /// }
@@ -512,7 +512,7 @@ pub fn is_enabled_log(log_type: u8) -> bool {
 ///
 /// ```ignore
 /// use osal_rs::log::*;
-/// 
+///
 /// let level = get_level_log();
 /// ```
 pub fn get_level_log() -> u8 {
@@ -536,7 +536,7 @@ pub fn get_level_log() -> u8 {
 ///
 /// ```ignore
 /// use osal_rs::log::set_enable_color;
-/// 
+///
 /// set_enable_color(true);   // Enable colored output
 /// set_enable_color(false);  // Disable colors
 /// ```
@@ -549,8 +549,6 @@ pub fn set_enable_color(enabled: bool) {
         }
     }
 }
-
-
 
 /// Core logging function that outputs formatted log messages.
 ///
@@ -592,7 +590,7 @@ pub fn set_enable_color(enabled: bool) {
 ///
 /// ```ignore
 /// use osal_rs::log::*;
-/// 
+///
 /// sys_log("APP", log_levels::FLAG_INFO, "Application started");
 /// sys_log("NET", log_levels::FLAG_ERROR, "Connection failed");
 /// ```
@@ -614,7 +612,6 @@ pub fn sys_log(tag: &str, log_type: u8, to_print: &str) {
 
         let mut color_reset = COLOR_RESET;
         let color = if MASK & log_levels::FLAG_COLOR_ON == log_levels::FLAG_COLOR_ON {
-
             match log_type {
                 log_levels::FLAG_DEBUG => COLOR_CYAN,
                 log_levels::FLAG_INFO => COLOR_GREEN,
@@ -628,20 +625,24 @@ pub fn sys_log(tag: &str, log_type: u8, to_print: &str) {
             ""
         };
 
-
         let now = System::get_current_time_us();
-
 
         #[cfg(not(feature = "std"))]
         {
             let mut buf = Bytes::<512>::new();
-            buf.format(format_args!("{color}({millis}ms)[{tag}] {to_print}{color_reset}{RETURN}", millis=now.as_millis()));
+            buf.format(format_args!(
+                "{color}({millis}ms)[{tag}] {to_print}{color_reset}{RETURN}",
+                millis = now.as_millis()
+            ));
             printf_on_uart(b"%s\0".as_ptr() as *const c_char, buf.as_cstr().as_ptr());
         }
 
         #[cfg(feature = "std")]
         {
-            std::println!("{color}({}ms)[{tag}] {to_print}{color_reset}", now.as_millis());
+            std::println!(
+                "{color}({}ms)[{tag}] {to_print}{color_reset}",
+                now.as_millis()
+            );
         }
 
         BUSY = 0;
@@ -663,7 +664,7 @@ pub fn sys_log(tag: &str, log_type: u8, to_print: &str) {
 ///
 /// ```ignore
 /// use osal_rs::log_debug;
-/// 
+///
 /// log_debug!("APP", "Initializing subsystem");
 /// log_debug!("APP", "Counter: {}, Status: {}", counter, status);
 /// ```
@@ -693,7 +694,7 @@ macro_rules! log_debug {
 ///
 /// ```ignore
 /// use osal_rs::log_info;
-/// 
+///
 /// log_info!("APP", "System initialized successfully");
 /// log_info!("NET", "Connected to server at {}", ip_addr);
 /// ```
@@ -723,7 +724,7 @@ macro_rules! log_info {
 ///
 /// ```ignore
 /// use osal_rs::log_warning;
-/// 
+///
 /// log_warning!("MEM", "Memory usage above 80%");
 /// log_warning!("SENSOR", "Temperature high: {} C", temp);
 /// ```
@@ -753,7 +754,7 @@ macro_rules! log_warning {
 ///
 /// ```ignore
 /// use osal_rs::log_error;
-/// 
+///
 /// log_error!("FS", "Failed to open file");
 /// log_error!("NET", "Connection timeout: {}", error);
 /// ```
@@ -783,7 +784,7 @@ macro_rules! log_error {
 ///
 /// ```ignore
 /// use osal_rs::log_fatal;
-/// 
+///
 /// log_fatal!("SYS", "Kernel panic!");
 /// log_fatal!("HW", "Hardware fault detected: {}", fault_code);
 /// ```

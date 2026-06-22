@@ -40,8 +40,8 @@
 //! On most systems, event groups support at least 24 usable event bits.
 //! The specific number depends on the underlying RTOS implementation.
 
-use crate::utils::Result;
 use crate::os::types::{EventBits, TickType};
+use crate::utils::Result;
 
 /// Event group synchronization primitive.
 ///
@@ -59,15 +59,15 @@ use crate::os::types::{EventBits, TickType};
 /// ```ignore
 /// use osal_rs::os::EventGroup;
 /// use osal_rs::os::types::EventBits;
-/// 
+///
 /// let events = EventGroup::new().unwrap();
-/// 
+///
 /// // Task 1: Wait for specific bits
 /// let bits = events.wait(0b0011, 1000);
 /// if bits & 0b0011 == 0b0011 {
 ///     println!("Both bits 0 and 1 are set");
 /// }
-/// 
+///
 /// // Task 2: Set multiple bits
 /// events.set(0b0011);
 /// ```
@@ -95,10 +95,10 @@ pub trait EventGroup {
     /// // Set bit 0
     /// let bits_after = events.set(0b0001);
     /// assert_ne!(bits_after & 0b0001, 0);
-    /// 
+    ///
     /// // Set bit 1 (bit 0 remains set)
     /// events.set(0b0010);
-    /// 
+    ///
     /// // Now bits 0 and 1 are both set
     /// assert_eq!(events.get(), 0b0011);
     /// ```
@@ -170,16 +170,16 @@ pub trait EventGroup {
     /// ```ignore
     /// // Start with bits 0 and 1 set
     /// events.set(0b0011);
-    /// 
+    ///
     /// // Clear bit 0
     /// let bits_after = events.clear(0b0001);
     /// assert_eq!(bits_after & 0b0001, 0);
-    /// 
+    ///
     /// // Now only bit 1 is set
     /// assert_eq!(events.get(), 0b0010);
     /// ```
     fn clear(&self, bits: EventBits) -> EventBits;
-    
+
     /// Clears event bits from an interrupt service routine.
     ///
     /// ISR-safe version of `clear()`.
@@ -216,7 +216,7 @@ pub trait EventGroup {
     /// ```ignore
     /// // Wait for any of bits 0 or 2 with 1000 tick timeout
     /// let result = events.wait(0b0101, 1000);
-    /// 
+    ///
     /// if result & 0b0101 != 0 {
     ///     // Success: at least one bit is set
     ///     println!("Condition met!");
@@ -224,7 +224,7 @@ pub trait EventGroup {
     ///     // Timeout: no requested bits were set in time
     ///     println!("Timeout - current bits: {:#b}", result);
     /// }
-    /// 
+    ///
     /// // Wait forever for a single bit
     /// let result = events.wait(0b0001, TickType::MAX);
     /// ```
@@ -241,10 +241,10 @@ pub trait EventGroup {
     ///
     /// ```ignore
     /// let mut events = EventGroup::new().unwrap();
-    /// 
+    ///
     /// // Use event group
     /// events.set(0b0001);
-    /// 
+    ///
     /// // Clean up when done
     /// events.delete();
     /// ```

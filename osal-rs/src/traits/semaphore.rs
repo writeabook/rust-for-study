@@ -51,9 +51,9 @@
 //! All operations are thread-safe. ISR-specific methods should only be called
 //! from interrupt context.
 
-use crate::utils::OsalRsBool;
 /// equal to use crate::traits::ToTick;
 use super::ToTick;
+use crate::utils::OsalRsBool;
 
 /// Counting semaphore for resource management.
 ///
@@ -76,15 +76,15 @@ use super::ToTick;
 /// ```ignore
 /// use osal_rs::os::Semaphore;
 /// use core::time::Duration;
-/// 
+///
 /// // Create with count 0 (binary semaphore for signaling)
 /// let sem = Semaphore::new_with_count(0).unwrap();
-/// 
+///
 /// // Task 1: Wait for signal
 /// if sem.wait(Duration::from_secs(1)).into() {
 ///     println!("Signal received!");
 /// }
-/// 
+///
 /// // Task 2: Send signal
 /// sem.signal();
 /// ```
@@ -94,7 +94,7 @@ use super::ToTick;
 /// ```ignore
 /// // Pool of 3 resources
 /// let pool = Semaphore::new(3, 3).unwrap();
-/// 
+///
 /// // Acquire resource
 /// if pool.wait(Duration::from_millis(100)).into() {
 ///     // Use resource
@@ -105,7 +105,6 @@ use super::ToTick;
 /// }
 /// ```
 pub trait Semaphore {
-
     /// Waits to acquire the semaphore (blocking).
     ///
     /// Decrements the semaphore count if greater than zero. If the count
@@ -134,9 +133,9 @@ pub trait Semaphore {
     /// ```ignore
     /// use osal_rs::os::Semaphore;
     /// use core::time::Duration;
-    /// 
+    ///
     /// let sem = Semaphore::new_with_count(1).unwrap();
-    /// 
+    ///
     /// // Wait with timeout
     /// if sem.wait(Duration::from_millis(100)).into() {
     ///     // Semaphore acquired, do work
@@ -145,7 +144,7 @@ pub trait Semaphore {
     /// } else {
     ///     println!("Timeout waiting for semaphore");
     /// }
-    /// 
+    ///
     /// // Wait forever
     /// sem.wait(Duration::MAX);
     /// ```
@@ -200,21 +199,21 @@ pub trait Semaphore {
     ///
     /// ```ignore
     /// use osal_rs::os::Semaphore;
-    /// 
+    ///
     /// // Binary semaphore for signaling
     /// let sem = Semaphore::new_with_count(0).unwrap();
-    /// 
+    ///
     /// // Task 1 is waiting on sem.wait()
     /// // Task 2 signals to unblock Task 1
     /// sem.signal();  // Unblocks Task 1
-    /// 
+    ///
     /// // Counting semaphore for resource pool
     /// let pool = Semaphore::new(3, 3).unwrap();
     /// pool.wait(Duration::ZERO);  // Count: 3 -> 2
     /// pool.signal();              // Count: 2 -> 3
     /// ```
     fn signal(&self) -> OsalRsBool;
-    
+
     /// Signals the semaphore from ISR context.
     ///
     /// ISR-safe version of `signal()`. Increments the semaphore count
@@ -241,7 +240,7 @@ pub trait Semaphore {
     /// if sem.signal_from_isr().into() {
     ///     // Signal sent successfully
     /// }
-    /// 
+    ///
     /// // In task context - wait for events
     /// loop {
     ///     if sem.wait(Duration::MAX).into() {
@@ -251,7 +250,7 @@ pub trait Semaphore {
     /// }
     /// ```
     fn signal_from_isr(&self) -> OsalRsBool;
-    
+
     /// Deletes the semaphore and frees its resources.
     ///
     /// # Safety
@@ -263,14 +262,13 @@ pub trait Semaphore {
     ///
     /// ```ignore
     /// let mut sem = Semaphore::new_with_count(1).unwrap();
-    /// 
+    ///
     /// // Use semaphore
     /// sem.wait(Duration::from_millis(100));
     /// sem.signal();
-    /// 
+    ///
     /// // Clean up when done
     /// sem.delete();
     /// ```
     fn delete(&mut self);
-
 }

@@ -38,17 +38,17 @@ pub fn test_mutex_creation() -> Result<()> {
 pub fn test_mutex_lock_unlock() -> Result<()> {
     log_info!(TAG, "Starting test_mutex_lock_unlock");
     let mutex = Mutex::new(42u32);
-    
+
     {
         let guard = mutex.lock();
         assert!(guard.is_ok());
-        
+
         if let Ok(g) = guard {
             log_debug!(TAG, "Mutex locked, value: {}", *g);
             assert_eq!(*g, 42);
         }
     }
-    
+
     {
         let guard = mutex.lock();
         assert!(guard.is_ok());
@@ -61,13 +61,13 @@ pub fn test_mutex_lock_unlock() -> Result<()> {
 pub fn test_mutex_modify_data() -> Result<()> {
     log_info!(TAG, "Starting test_mutex_modify_data");
     let mutex = Mutex::new(0u32);
-    
+
     {
         let mut guard = mutex.lock()?;
         *guard = 100;
         log_debug!(TAG, "Modified value to: {}", *guard);
     }
-    
+
     {
         let guard = mutex.lock()?;
         log_debug!(TAG, "Read value: {}", *guard);
@@ -80,13 +80,13 @@ pub fn test_mutex_modify_data() -> Result<()> {
 pub fn test_mutex_multiple_locks() -> Result<()> {
     log_info!(TAG, "Starting test_mutex_multiple_locks");
     let mutex = Mutex::new(0u32);
-    
+
     for i in 0..10 {
         let mut guard = mutex.lock()?;
         *guard += 1;
         assert_eq!(*guard, i + 1);
     }
-    
+
     let guard = mutex.lock()?;
     log_debug!(TAG, "Final counter value: {}", *guard);
     assert_eq!(*guard, 10);
@@ -97,12 +97,12 @@ pub fn test_mutex_multiple_locks() -> Result<()> {
 pub fn test_mutex_guard_drop() -> Result<()> {
     log_info!(TAG, "Starting test_mutex_guard_drop");
     let mutex = Mutex::new(42u32);
-    
+
     {
         let _guard = mutex.lock()?;
         log_debug!(TAG, "Guard acquired, will drop on scope exit");
     }
-    
+
     let guard = mutex.lock();
     assert!(guard.is_ok());
     log_info!(TAG, "test_mutex_guard_drop PASSED");
@@ -116,16 +116,24 @@ pub fn test_mutex_with_struct() -> Result<()> {
         value: u32,
         flag: bool,
     }
-    
-    let mutex = Mutex::new(TestData { value: 0, flag: false });
-    
+
+    let mutex = Mutex::new(TestData {
+        value: 0,
+        flag: false,
+    });
+
     {
         let mut guard = mutex.lock()?;
         guard.value = 123;
         guard.flag = true;
-        log_debug!(TAG, "Modified struct - value: {}, flag: {}", guard.value, guard.flag);
+        log_debug!(
+            TAG,
+            "Modified struct - value: {}, flag: {}",
+            guard.value,
+            guard.flag
+        );
     }
-    
+
     {
         let guard = mutex.lock()?;
         assert_eq!(guard.value, 123);
@@ -174,9 +182,7 @@ pub fn test_raw_mutex_recursive() -> Result<()> {
         // Another thread must NOT be able to acquire it while held
         {
             let raw_clone = Arc::clone(&raw);
-            let handle = thread::spawn(move || {
-                raw_clone.lock_from_isr()
-            });
+            let handle = thread::spawn(move || raw_clone.lock_from_isr());
             assert_eq!(handle.join().unwrap(), OsalRsBool::False);
         }
     }

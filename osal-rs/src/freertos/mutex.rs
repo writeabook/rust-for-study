@@ -26,18 +26,18 @@
 
 use core::cell::UnsafeCell;
 use core::fmt::{Debug, Display, Formatter};
-use core::ops::{Deref, DerefMut};
 use core::marker::PhantomData;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::ops::{Deref, DerefMut};
 use core::ptr::null_mut;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use alloc::sync::Arc;
 
 use super::ffi::{MutexHandle, pdFALSE, pdTRUE};
 use super::system::System;
 use crate::traits::SystemFn;
-use crate::traits::{MutexGuardFn, RawMutexFn, MutexFn, ToTick};
-use crate::utils::{Result, Error, OsalRsBool, MAX_DELAY};
+use crate::traits::{MutexFn, MutexGuardFn, RawMutexFn, ToTick};
+use crate::utils::{Error, MAX_DELAY, OsalRsBool, Result};
 
 //// RawMutex ////
 
@@ -74,19 +74,18 @@ impl RawMutex {
 }
 
 impl RawMutexFn for RawMutex {
-
     /// Attempts to acquire the mutex, blocking until it becomes available.
-    /// 
+    ///
     /// This function will block the calling thread until the mutex can be acquired.
     /// Since this is a recursive mutex, the same thread can lock it multiple times.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `OsalRsBool::True` - Successfully acquired the mutex
     /// * `OsalRsBool::False` - Failed to acquire (should not happen with MAX_DELAY)
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```ignore
     /// use osal_rs::os::RawMutex;
     /// use osal_rs::traits::RawMutexFn;
@@ -107,13 +106,13 @@ impl RawMutexFn for RawMutex {
     }
 
     /// Attempts to acquire the mutex from an interrupt service routine (ISR).
-    /// 
+    ///
     /// **WARNING:** FreeRTOS does not support taking recursive mutexes from ISR
     /// context. This method always returns `OsalRsBool::False` on the FreeRTOS
     /// backend. Use a semaphore or critical section instead.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `OsalRsBool::False` - Always returns False on FreeRTOS (recursive
     ///   mutexes cannot be used from ISR context)
     fn lock_from_isr(&self) -> OsalRsBool {
@@ -121,21 +120,21 @@ impl RawMutexFn for RawMutex {
     }
 
     /// Releases the mutex.
-    /// 
+    ///
     /// For recursive mutexes, this must be called as many times as `lock()` was called
     /// to fully release the mutex.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `OsalRsBool::True` - Successfully released the mutex
     /// * `OsalRsBool::False` - Failed to release (e.g., not locked by current thread)
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```ignore
     /// use osal_rs::os::RawMutex;
     /// use osal_rs::traits::RawMutexFn;
-    /// 
+    ///
     /// let mutex = RawMutex::new().unwrap();
     /// mutex.lock();
     /// // Critical section
@@ -150,15 +149,14 @@ impl RawMutexFn for RawMutex {
         }
     }
 
-
     /// Releases the mutex from an interrupt service routine (ISR).
-    /// 
+    ///
     /// **WARNING:** FreeRTOS does not support giving recursive mutexes from ISR
     /// context. This method always returns `OsalRsBool::False` on the FreeRTOS
     /// backend. Use a semaphore or critical section instead.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `OsalRsBool::False` - Always returns False on FreeRTOS (recursive
     ///   mutexes cannot be used from ISR context)
     fn unlock_from_isr(&self) -> OsalRsBool {
@@ -166,20 +164,20 @@ impl RawMutexFn for RawMutex {
     }
 
     /// Deletes the mutex and frees its resources.
-    /// 
+    ///
     /// This function destroys the mutex and releases any memory allocated for it.
     /// After calling this, the mutex should not be used. The handle is set to null.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// Ensure no threads are waiting on or holding this mutex before deleting it.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```ignore
     /// use osal_rs::os::RawMutex;
     /// use osal_rs::traits::RawMutexFn;
-    /// 
+    ///
     /// let mut mutex = RawMutex::new().unwrap();
     /// // Use the mutex...
     /// mutex.delete();
@@ -191,7 +189,7 @@ impl RawMutexFn for RawMutex {
 }
 
 /// Automatically deletes the mutex when it goes out of scope.
-/// 
+///
 /// This ensures proper cleanup of FreeRTOS resources.
 impl Drop for RawMutex {
     fn drop(&mut self) {
@@ -211,12 +209,9 @@ impl Deref for RawMutex {
     }
 }
 
-
 impl Debug for RawMutex {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("RawMutex")
-            .field("handle", &self.0)
-            .finish()
+        f.debug_struct("RawMutex").field("handle", &self.0).finish()
     }
 }
 
@@ -244,9 +239,9 @@ impl Display for RawMutex {
 ///
 /// ```ignore
 /// use osal_rs::os::Mutex;
-/// 
+///
 /// let mutex = Mutex::new(0);
-/// 
+///
 /// // Acquire the lock and modify the data
 /// {
 ///     let mut guard = mutex.lock().unwrap();
@@ -259,15 +254,15 @@ impl Display for RawMutex {
 /// ```ignore
 /// use osal_rs::os::{Mutex, Thread};
 /// use alloc::sync::Arc;
-/// 
+///
 /// let counter = Arc::new(Mutex::new(0));
 /// let counter_clone = counter.clone();
-/// 
+///
 /// let thread = Thread::new("worker", 2048, 5, move || {
 ///     let mut guard = counter_clone.lock().unwrap();
 ///     *guard += 1;
 /// }).unwrap();
-/// 
+///
 /// thread.start().unwrap();
 /// ```
 ///
@@ -275,9 +270,9 @@ impl Display for RawMutex {
 ///
 /// ```ignore
 /// use osal_rs::os::Mutex;
-/// 
+///
 /// let mutex = Mutex::new(0);
-/// 
+///
 /// // In an interrupt handler:
 /// if let Ok(mut guard) = mutex.lock_from_isr() {
 ///     *guard = 42;
@@ -292,12 +287,10 @@ pub struct Mutex<T: ?Sized> {
     owner: AtomicPtr<core::ffi::c_void>,
 }
 
-
 unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
 unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 
-impl<T: ?Sized>  Mutex<T> {
-        
+impl<T: ?Sized> Mutex<T> {
     /// Creates a new mutex wrapping the supplied data.
     ///
     /// The mutex is created using FreeRTOS recursive mutexes, which support
@@ -311,14 +304,14 @@ impl<T: ?Sized>  Mutex<T> {
     ///
     /// ```ignore
     /// use osal_rs::os::{Mutex, MutexFn};
-    /// 
+    ///
     /// let mutex = Mutex::new(0);
     /// let mut guard = mutex.lock().unwrap();
     /// *guard = 42;
     /// ```
     pub fn new(data: T) -> Self
-    where 
-        T: Sized
+    where
+        T: Sized,
     {
         Self {
             inner: RawMutex::new().unwrap(),
@@ -328,7 +321,7 @@ impl<T: ?Sized>  Mutex<T> {
     }
 
     /// Internal helper to access the protected data mutably.
-    /// 
+    ///
     /// This is a private method used internally by the mutex implementation.
     #[allow(dead_code)]
     #[inline]
@@ -338,24 +331,32 @@ impl<T: ?Sized>  Mutex<T> {
 }
 
 impl<T: ?Sized> MutexFn<T> for Mutex<T> {
-    type Guard<'a> = MutexGuard<'a, T> where Self: 'a, T: 'a;
-    type GuardFromIsr<'a> = MutexGuardFromIsr<'a, T> where Self: 'a, T: 'a;
+    type Guard<'a>
+        = MutexGuard<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
+    type GuardFromIsr<'a>
+        = MutexGuardFromIsr<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
 
     /// Acquires the mutex, blocking until it becomes available.
-    /// 
+    ///
     /// Returns a RAII guard that will automatically unlock the mutex when dropped.
     /// The guard provides access to the protected data through `Deref` and `DerefMut`.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Ok(MutexGuard)` - Successfully acquired, guard provides data access
     /// * `Err(Error::MutexLockFailed)` - Failed to acquire the mutex
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```ignore
     /// use osal_rs::os::{Mutex, MutexFn};
-    /// 
+    ///
     /// let mutex = Mutex::new(0);
     /// let mut guard = mutex.lock().unwrap();
     /// *guard += 1;
@@ -385,25 +386,25 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
     }
 
     /// Acquires the mutex from an ISR context.
-    /// 
+    ///
     /// This is the ISR-safe version of `lock()`. It attempts to acquire the mutex
     /// without blocking and returns an ISR-specific guard.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Ok(MutexGuardFromIsr)` - Successfully acquired, guard provides data access
     /// * `Err(Error::MutexLockFailed)` - Mutex is already locked
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// Must only be called from ISR context.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```ignore
     /// // In interrupt handler
     /// use osal_rs::os::{Mutex, MutexFn};
-    /// 
+    ///
     /// fn irq_handler(mutex: &Mutex<u32>) {
     ///     if let Ok(mut guard) = mutex.lock_from_isr() {
     ///         *guard = 42;
@@ -438,15 +439,15 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
     ///
     /// ```ignore
     /// use osal_rs::os::{Mutex, MutexFn};
-    /// 
+    ///
     /// let mutex = Mutex::new(5);
     /// let value = mutex.into_inner().unwrap();
     /// assert_eq!(value, 5);
     /// ```
-    fn into_inner(self) -> Result<T> 
-    where 
-        Self: Sized, 
-        T: Sized 
+    fn into_inner(self) -> Result<T>
+    where
+        Self: Sized,
+        T: Sized,
     {
         Ok(self.data.into_inner())
     }
@@ -460,7 +461,7 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
     ///
     /// ```ignore
     /// use osal_rs::os::{Mutex, MutexFn};
-    /// 
+    ///
     /// let mut mutex = Mutex::new(0);
     /// *mutex.get_mut() = 10;
     /// assert_eq!(*mutex.get_mut(), 10);
@@ -503,10 +504,10 @@ impl<T> Mutex<T> {
     /// ```ignore
     /// use osal_rs::os::Mutex;
     /// use alloc::sync::Arc;
-    /// 
+    ///
     /// let shared_data = Mutex::new_arc(0u32);
     /// let data_clone = Arc::clone(&shared_data);
-    /// 
+    ///
     /// // Use in thread...
     /// let thread = Thread::new("worker", 2048, 5, move || {
     ///     let mut guard = data_clone.lock().unwrap();
@@ -519,23 +520,23 @@ impl<T> Mutex<T> {
 }
 
 /// Formats the mutex for debugging purposes.
-impl<T> Debug for Mutex<T> 
-where 
-    T: ?Sized {
+impl<T> Debug for Mutex<T>
+where
+    T: ?Sized,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Mutex")
-            .field("inner", &self.inner)
-            .finish()
+        f.debug_struct("Mutex").field("inner", &self.inner).finish()
     }
 }
 
 /// Formats the mutex for display purposes.
-impl<T> Display for Mutex<T> 
-where 
-    T: ?Sized {
+impl<T> Display for Mutex<T>
+where
+    T: ?Sized,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "Mutex {{ inner: {} }}", self.inner)
-    }   
+    }
 }
 
 //// MutexGuard ////
@@ -549,9 +550,9 @@ where
 ///
 /// ```ignore
 /// use osal_rs::os::{Mutex, MutexFn};
-/// 
+///
 /// let mutex = Mutex::new(0);
-/// 
+///
 /// {
 ///     let mut guard = mutex.lock().unwrap();
 ///     *guard += 1;  // Access protected data
@@ -601,9 +602,9 @@ impl<'a, T: ?Sized> MutexGuardFn<'a, T> for MutexGuard<'a, T> {
     /// let new_value = 42;
     /// guard.update(&new_value);
     /// ```
-    fn update(&mut self, t: &T) 
+    fn update(&mut self, t: &T)
     where
-        T: Clone
+        T: Clone,
     {
         // Dereference twice: first to get &mut T from MutexGuard,
         // then assign the cloned value
@@ -668,9 +669,9 @@ impl<'a, T: ?Sized> MutexGuardFn<'a, T> for MutexGuardFromIsr<'a, T> {
     ///     guard.update(&new_value);
     /// }
     /// ```
-    fn update(&mut self, t: &T) 
+    fn update(&mut self, t: &T)
     where
-        T: Clone
+        T: Clone,
     {
         **self = t.clone();
     }

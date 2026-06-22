@@ -230,7 +230,9 @@ extern crate alloc;
     all(feature = "freertos", feature = "posix"),
     all(feature = "linux", feature = "posix"),
 ))]
-compile_error!("Only one OSAL backend feature may be enabled at a time (freertos | linux | posix).");
+compile_error!(
+    "Only one OSAL backend feature may be enabled at a time (freertos | linux | posix)."
+);
 
 #[cfg(all(feature = "linux", not(feature = "std")))]
 compile_error!("The `linux` backend requires the `std` feature.");
@@ -392,11 +394,10 @@ pub mod os {
     pub use crate::traits::*;
 
     /// RTOS configuration constants and types.
-    pub use crate::osal::config as config;
+    pub use crate::osal::config;
 
     /// Type aliases and common types used throughout OSAL.
-    pub use crate::osal::types as types;
-
+    pub use crate::osal::types;
 }
 
 /// OSAL module for the Linux backend.
@@ -406,19 +407,19 @@ pub mod os {
 /// implementation types.
 #[cfg(all(feature = "linux", not(feature = "freertos")))]
 pub mod os {
-    pub use crate::traits::*;
-    pub use crate::linux::types as types;
-    pub use crate::linux::config as config;
-    pub use crate::linux::system::{System, SystemState};
-    pub use crate::linux::thread::{Thread, ThreadMetadata, ThreadState};
-    pub use crate::linux::mutex::*;
-    pub use crate::linux::semaphore::*;
+    pub use crate::linux::config;
     #[allow(unused_imports)]
     pub use crate::linux::event_group::*;
+    pub use crate::linux::mutex::*;
     #[allow(unused_imports)]
     pub use crate::linux::queue::*;
+    pub use crate::linux::semaphore::*;
+    pub use crate::linux::system::{System, SystemState};
+    pub use crate::linux::thread::{Thread, ThreadMetadata, ThreadState};
     #[allow(unused_imports)]
     pub use crate::linux::timer::*;
+    pub use crate::linux::types;
+    pub use crate::traits::*;
 }
 
 /// Default panic handler for `no_std` environments.
@@ -462,4 +463,3 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     #[allow(clippy::empty_loop)]
     loop {}
 }
-

@@ -32,11 +32,14 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 use super::ffi::task::INVALID;
-use super::ffi::{ TaskStatus, ThreadHandle, pdPASS, pdTRUE, vTaskDelete, vTaskGetInfo, vTaskResume, vTaskSuspend, xTaskCreate, xTaskGetCurrentTaskHandle};
-use super::types::{StackType, UBaseType, BaseType, TickType};
+use super::ffi::{
+    TaskStatus, ThreadHandle, pdPASS, pdTRUE, vTaskDelete, vTaskGetInfo, vTaskResume, vTaskSuspend,
+    xTaskCreate, xTaskGetCurrentTaskHandle,
+};
 use super::thread::ThreadState::*;
+use super::types::{BaseType, StackType, TickType, UBaseType};
 use crate::os::ThreadSimpleFnPtr;
-use crate::traits::{ThreadFn, ThreadParam, ThreadFnPtr, ThreadNotification, ToTick, ToPriority};
+use crate::traits::{ThreadFn, ThreadFnPtr, ThreadNotification, ThreadParam, ToPriority, ToTick};
 use crate::utils::{Bytes, DoublePtr, Error, Result};
 
 const MAX_TASK_NAME_LEN: usize = 16;
@@ -47,10 +50,10 @@ const MAX_TASK_NAME_LEN: usize = 16;
 ///
 /// ```ignore
 /// use osal_rs::os::{Thread, ThreadState};
-/// 
+///
 /// let thread = Thread::current();
 /// let metadata = thread.metadata().unwrap();
-/// 
+///
 /// match metadata.state {
 ///     ThreadState::Running => println!("Thread is currently executing"),
 ///     ThreadState::Ready => println!("Thread is ready to run"),
@@ -85,10 +88,10 @@ pub enum ThreadState {
 ///
 /// ```ignore
 /// use osal_rs::os::Thread;
-/// 
+///
 /// let thread = Thread::current();
 /// let metadata = thread.metadata().unwrap();
-/// 
+///
 /// println!("Thread: {}", metadata.name);
 /// println!("Priority: {}", metadata.priority);
 /// println!("Stack high water mark: {}", metadata.stack_high_water_mark);
@@ -124,7 +127,7 @@ unsafe impl Sync for ThreadMetadata {}
 ///
 /// This conversion extracts all relevant task information from the FreeRTOS
 /// TaskStatus structure and creates a safe Rust representation.
-impl From<(ThreadHandle,TaskStatus)> for ThreadMetadata {
+impl From<(ThreadHandle, TaskStatus)> for ThreadMetadata {
     fn from(status: (ThreadHandle, TaskStatus)) -> Self {
         let state = match status.1.eCurrentState {
             0 => Running,
@@ -186,7 +189,7 @@ impl Default for ThreadMetadata {
 /// ```ignore
 /// use osal_rs::os::{Thread, ThreadPriority};
 /// use core::time::Duration;
-/// 
+///
 /// let thread = Thread::new(
 ///     "worker",
 ///     2048,  // stack size in words
@@ -198,7 +201,7 @@ impl Default for ThreadMetadata {
 ///         }
 ///     }
 /// ).unwrap();
-/// 
+///
 /// thread.start().unwrap();
 /// ```
 ///
@@ -207,7 +210,7 @@ impl Default for ThreadMetadata {
 /// ```ignore
 /// use osal_rs::os::{Thread, ThreadNotification};
 /// use core::time::Duration;
-/// 
+///
 /// let thread = Thread::new("notified", 2048, 5, || {
 ///     loop {
 ///         if let Some(value) = Thread::current().wait_notification(Duration::from_secs(1)) {
@@ -215,7 +218,7 @@ impl Default for ThreadMetadata {
 ///         }
 ///     }
 /// }).unwrap();
-/// 
+///
 /// thread.start().unwrap();
 /// thread.notify(42).unwrap();  // Send notification
 /// ```
@@ -226,14 +229,13 @@ pub struct Thread {
     stack_depth: StackType,
     priority: UBaseType,
     callback: Option<Arc<ThreadFnPtr>>,
-    param: Option<ThreadParam>
+    param: Option<ThreadParam>,
 }
 
 unsafe impl Send for Thread {}
 unsafe impl Sync for Thread {}
 
 impl Thread {
-
     /// Creates a new uninitialized thread.
     ///
     /// The thread must be started with `spawn()` or `spawn_simple()`.
@@ -242,18 +244,17 @@ impl Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::{Thread, ThreadFn};
-    /// 
+    ///
     /// let thread = Thread::new("worker", 4096, 5);
     /// ```
-    pub fn new(name: &str, stack_depth: StackType, priority: UBaseType) -> Self 
-    {
-        Self { 
-            handle: null_mut(), 
+    pub fn new(name: &str, stack_depth: StackType, priority: UBaseType) -> Self {
+        Self {
+            handle: null_mut(),
             name: Bytes::from_str(name),
-            stack_depth, 
-            priority, 
+            stack_depth,
+            priority,
             callback: None,
-            param: None 
+            param: None,
         }
     }
 
@@ -262,17 +263,22 @@ impl Thread {
     /// # Returns
     ///
     /// * `Err(Error::NullPtr)` if handle is null
-    pub fn new_with_handle(handle: ThreadHandle, name: &str, stack_depth: StackType, priority: UBaseType) -> Result<Self> {
+    pub fn new_with_handle(
+        handle: ThreadHandle,
+        name: &str,
+        stack_depth: StackType,
+        priority: UBaseType,
+    ) -> Result<Self> {
         if handle.is_null() {
             return Err(Error::NullPtr);
         }
-        Ok(Self { 
-            handle, 
-            name: Bytes::from_str(name), 
-            stack_depth, 
-            priority, 
+        Ok(Self {
+            handle,
+            name: Bytes::from_str(name),
+            stack_depth,
+            priority,
             callback: None,
-            param: None 
+            param: None,
         })
     }
 
@@ -290,18 +296,21 @@ impl Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::Thread;
-    /// 
+    ///
     /// let thread = Thread::new_with_to_priority("worker", 2048, 5);
     /// ```
-    pub fn new_with_to_priority(name: &str, stack_depth: StackType, priority: impl ToPriority) -> Self 
-    {
-        Self { 
-            handle: null_mut(), 
-            name: Bytes::from_str(name), 
-            stack_depth, 
-            priority: priority.to_priority(), 
+    pub fn new_with_to_priority(
+        name: &str,
+        stack_depth: StackType,
+        priority: impl ToPriority,
+    ) -> Self {
+        Self {
+            handle: null_mut(),
+            name: Bytes::from_str(name),
+            stack_depth,
+            priority: priority.to_priority(),
             callback: None,
-            param: None 
+            param: None,
         }
     }
 
@@ -322,22 +331,27 @@ impl Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::Thread;
-    /// 
+    ///
     /// // Get current task handle from FreeRTOS
     /// let handle = get_task_handle();
     /// let thread = Thread::new_with_handle_and_to_priority(handle, "existing", 2048, 5).unwrap();
     /// ```
-    pub fn new_with_handle_and_to_priority(handle: ThreadHandle, name: &str, stack_depth: StackType, priority: impl ToPriority) -> Result<Self> {
+    pub fn new_with_handle_and_to_priority(
+        handle: ThreadHandle,
+        name: &str,
+        stack_depth: StackType,
+        priority: impl ToPriority,
+    ) -> Result<Self> {
         if handle.is_null() {
             return Err(Error::NullPtr);
         }
-        Ok(Self { 
-            handle, 
+        Ok(Self {
+            handle,
             name: Bytes::from_str(name),
-            stack_depth, 
-            priority: priority.to_priority(), 
+            stack_depth,
+            priority: priority.to_priority(),
             callback: None,
-            param: None 
+            param: None,
         })
     }
 
@@ -355,7 +369,7 @@ impl Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::Thread;
-    /// 
+    ///
     /// let handle = get_some_task_handle();
     /// let metadata = Thread::get_metadata_from_handle(handle);
     /// println!("Thread '{}' state: {:?}", metadata.name, metadata.state);
@@ -382,7 +396,7 @@ impl Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::Thread;
-    /// 
+    ///
     /// let thread = Thread::new("worker", 2048, 5);
     /// let metadata = Thread::get_metadata(&thread);
     /// println!("Stack high water mark: {}", metadata.stack_high_water_mark);
@@ -415,7 +429,7 @@ impl Thread {
     /// ```ignore
     /// use osal_rs::os::{Thread, ThreadFn};
     /// use core::time::Duration;
-    /// 
+    ///
     /// let thread = Thread::current();
     /// match thread.wait_notification_with_to_tick(0, 0xFF, Duration::from_secs(1)) {
     ///     Ok(value) => println!("Received: {}", value),
@@ -423,13 +437,21 @@ impl Thread {
     /// }
     /// ```
     #[inline]
-    pub fn wait_notification_with_to_tick(&self, bits_to_clear_on_entry: u32, bits_to_clear_on_exit: u32 , timeout_ticks: impl ToTick) -> Result<u32> {
+    pub fn wait_notification_with_to_tick(
+        &self,
+        bits_to_clear_on_entry: u32,
+        bits_to_clear_on_exit: u32,
+        timeout_ticks: impl ToTick,
+    ) -> Result<u32> {
         if self.handle.is_null() {
             return Err(Error::NullPtr);
         }
-        self.wait_notification(bits_to_clear_on_entry, bits_to_clear_on_exit, timeout_ticks.to_ticks())
+        self.wait_notification(
+            bits_to_clear_on_entry,
+            bits_to_clear_on_exit,
+            timeout_ticks.to_ticks(),
+        )
     }
-
 }
 
 /// Internal C-compatible wrapper for thread callbacks.
@@ -455,9 +477,7 @@ unsafe extern "C" fn callback_c_wrapper(param_ptr: *mut c_void) {
 
     let thread = *thread_instance.clone();
 
-    let param_arc: Option<ThreadParam> = thread_instance
-        .param
-        .clone();
+    let param_arc: Option<ThreadParam> = thread_instance.param.clone();
 
     if let Some(callback) = &thread_instance.callback.clone() {
         let _ = callback(thread_instance, param_arc);
@@ -486,19 +506,18 @@ unsafe extern "C" fn simple_callback_wrapper(param_ptr: *mut c_void) {
     let func: Box<Arc<ThreadSimpleFnPtr>> = unsafe { Box::from_raw(param_ptr as *mut _) };
     func();
 
-    unsafe { vTaskDelete( xTaskGetCurrentTaskHandle()); } 
+    unsafe {
+        vTaskDelete(xTaskGetCurrentTaskHandle());
+    }
 }
 
-
-
 impl ThreadFn for Thread {
-
     /// Spawns a new thread with a callback.
-    /// 
+    ///
     /// # Important
     /// The callback must be `'static`, which means it cannot borrow local variables.
     /// Use `move` in the closure to transfer ownership of any captured values:
-    /// 
+    ///
     /// ```ignore
     /// let data = Arc::new(Mutex::new(0));
     /// let thread = Thread::new("my_thread", 4096, 3, move |_thread, _param| {
@@ -508,15 +527,15 @@ impl ThreadFn for Thread {
     ///     Ok(Arc::new(()))
     /// });
     /// ``
-    fn spawn<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self> 
-        where 
+    fn spawn<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
+    where
         F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam>,
-        F: Send + Sync + 'static {
-
-        let mut handle: ThreadHandle =  null_mut();
+        F: Send + Sync + 'static,
+    {
+        let mut handle: ThreadHandle = null_mut();
 
         let func: Arc<ThreadFnPtr> = Arc::new(callback);
-        
+
         self.callback = Some(func);
         self.param = param.clone();
 
@@ -534,10 +553,10 @@ impl ThreadFn for Thread {
         };
 
         if ret != pdPASS {
-            return Err(Error::OutOfMemory)
+            return Err(Error::OutOfMemory);
         }
 
-        Ok(Self { 
+        Ok(Self {
             handle,
             callback: self.callback.clone(),
             param,
@@ -547,17 +566,17 @@ impl ThreadFn for Thread {
 
     /// Spawns a new thread with a simple closure, similar to `std::thread::spawn`.
     /// This is the recommended way to create threads for most use cases.
-    /// 
+    ///
     /// # Example
     /// ```ignore
     /// let counter = Arc::new(Mutex::new(0));
     /// let counter_clone = Arc::clone(&counter);
-    /// 
+    ///
     /// let handle = Thread::spawn_simple("worker", 4096, 3, move || {
     ///     let mut num = counter_clone.lock().unwrap();
     ///     *num += 1;
     /// }).unwrap();
-    /// 
+    ///
     /// handle.join(core::ptr::null_mut());
     /// ```
     fn spawn_simple<F>(&mut self, callback: F) -> Result<Self>
@@ -566,7 +585,7 @@ impl ThreadFn for Thread {
     {
         let func: Arc<ThreadSimpleFnPtr> = Arc::new(callback);
         let boxed_func = Box::new(func);
-        
+
         let mut handle: ThreadHandle = null_mut();
 
         let ret = unsafe {
@@ -600,13 +619,15 @@ impl ThreadFn for Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::{Thread, ThreadFn};
-    /// 
+    ///
     /// let thread = Thread::new("temp", 2048, 5);
     /// thread.delete();
     /// ```
     fn delete(&self) {
         if !self.handle.is_null() {
-            unsafe { vTaskDelete( self.handle ); } 
+            unsafe {
+                vTaskDelete(self.handle);
+            }
         }
     }
 
@@ -619,7 +640,7 @@ impl ThreadFn for Thread {
     /// ```ignore
     /// use osal_rs::os::{Thread, ThreadFn};
     /// use core::time::Duration;
-    /// 
+    ///
     /// let thread = get_some_thread();
     /// thread.suspend();
     /// Duration::from_secs(1).sleep();
@@ -627,7 +648,9 @@ impl ThreadFn for Thread {
     /// ```
     fn suspend(&self) {
         if !self.handle.is_null() {
-            unsafe { vTaskSuspend( self.handle ); } 
+            unsafe {
+                vTaskSuspend(self.handle);
+            }
         }
     }
 
@@ -640,7 +663,9 @@ impl ThreadFn for Thread {
     /// ```
     fn resume(&self) {
         if !self.handle.is_null() {
-            unsafe { vTaskResume( self.handle ); } 
+            unsafe {
+                vTaskResume(self.handle);
+            }
         }
     }
 
@@ -651,7 +676,9 @@ impl ThreadFn for Thread {
     /// Always returns `Ok(0)`
     fn join(&self, _retval: DoublePtr) -> Result<i32> {
         if !self.handle.is_null() {
-            unsafe { vTaskDelete( self.handle ); } 
+            unsafe {
+                vTaskDelete(self.handle);
+            }
         }
         Ok(0)
     }
@@ -662,7 +689,7 @@ impl ThreadFn for Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::{Thread, ThreadFn};
-    /// 
+    ///
     /// let thread = Thread::current();
     /// let meta = thread.get_metadata();
     /// println!("Running thread: {}", meta.name);
@@ -681,7 +708,7 @@ impl ThreadFn for Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::{Thread, ThreadFn};
-    /// 
+    ///
     /// let current = Thread::get_current();
     /// println!("Current thread: {}", current.get_metadata().name);
     /// ```
@@ -714,7 +741,7 @@ impl ThreadFn for Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::{Thread, ThreadFn, ThreadNotification};
-    /// 
+    ///
     /// let thread = get_worker_thread();
     /// thread.notify(ThreadNotification::SetValueWithOverwrite(42)).unwrap();
     /// ```
@@ -725,18 +752,13 @@ impl ThreadFn for Thread {
 
         let (action, value) = notification.into();
 
-        let ret = xTaskNotify!(
-            self.handle,
-            value,
-            action
-        );
-        
+        let ret = xTaskNotify!(self.handle, value, action);
+
         if ret != pdPASS {
             Err(Error::QueueFull)
         } else {
             Ok(())
         }
-
     }
 
     /// Sends a notification to this thread from an ISR.
@@ -759,19 +781,18 @@ impl ThreadFn for Thread {
     /// let mut woken = pdFALSE;
     /// thread.notify_from_isr(ThreadNotification::Increment, &mut woken).ok();
     /// ```
-    fn notify_from_isr(&self, notification: ThreadNotification, higher_priority_task_woken: &mut BaseType) -> Result<()> {
+    fn notify_from_isr(
+        &self,
+        notification: ThreadNotification,
+        higher_priority_task_woken: &mut BaseType,
+    ) -> Result<()> {
         if self.handle.is_null() {
             return Err(Error::NullPtr);
         }
 
         let (action, value) = notification.into();
 
-        let ret = xTaskNotifyFromISR!(
-            self.handle,
-            value,
-            action,
-            higher_priority_task_woken
-        );
+        let ret = xTaskNotifyFromISR!(self.handle, value, action, higher_priority_task_woken);
 
         if ret != pdPASS {
             Err(Error::QueueFull)
@@ -798,14 +819,19 @@ impl ThreadFn for Thread {
     ///
     /// ```ignore
     /// use osal_rs::os::{Thread, ThreadFn};
-    /// 
+    ///
     /// let thread = Thread::current();
     /// match thread.wait_notification(0, 0xFFFFFFFF, 1000) {
     ///     Ok(value) => println!("Received notification: {}", value),
     ///     Err(_) => println!("Timeout waiting for notification"),
     /// }
     /// ```
-    fn wait_notification(&self, bits_to_clear_on_entry: u32, bits_to_clear_on_exit: u32 , timeout_ticks: TickType) -> Result<u32> {
+    fn wait_notification(
+        &self,
+        bits_to_clear_on_entry: u32,
+        bits_to_clear_on_exit: u32,
+        timeout_ticks: TickType,
+    ) -> Result<u32> {
         if self.handle.is_null() {
             return Err(Error::NullPtr);
         }
@@ -818,7 +844,6 @@ impl ThreadFn for Thread {
             &mut notification_value,
             timeout_ticks
         );
-        
 
         if ret == pdTRUE {
             Ok(notification_value)
@@ -826,14 +851,12 @@ impl ThreadFn for Thread {
             Err(Error::Timeout)
         }
     }
-
 }
-
 
 // impl Drop for Thread {
 //     fn drop(&mut self) {
 //         if !self.handle.is_null() {
-//             unsafe { vTaskDelete( self.handle ); } 
+//             unsafe { vTaskDelete( self.handle ); }
 //         }
 //     }
 // }
@@ -870,8 +893,10 @@ impl Debug for Thread {
 /// Shows a concise representation with handle, name, priority, and stack depth.
 impl Display for Thread {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Thread {{ handle: {:?}, name: {}, priority: {}, stack_depth: {} }}", self.handle, self.name, self.priority, self.stack_depth)
+        write!(
+            f,
+            "Thread {{ handle: {:?}, name: {}, priority: {}, stack_depth: {} }}",
+            self.handle, self.name, self.priority, self.stack_depth
+        )
     }
 }
-
-

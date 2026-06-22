@@ -3,13 +3,13 @@
 
 extern crate alloc;
 
-use core::time::Duration;
 use alloc::sync::Arc;
+use core::time::Duration;
 
-use osal_rs::os::*;
-use osal_rs::os::types::TickType;
-use osal_rs::utils::Result;
 use osal_rs::log_info;
+use osal_rs::os::types::TickType;
+use osal_rs::os::*;
+use osal_rs::utils::Result;
 
 const TAG: &str = "LinuxThreadTests";
 
@@ -22,7 +22,8 @@ pub fn test_thread_handles_unique() -> Result<()> {
     let t1 = Thread::new("h1", 1024, 1);
     let t2 = Thread::new("h2", 1024, 1);
     assert_ne!(*t1, *t2, "handles must differ");
-    t1.delete(); t2.delete();
+    t1.delete();
+    t2.delete();
     log_info!(TAG, "PASSED");
     Ok(())
 }
@@ -88,7 +89,9 @@ pub fn test_thread_fast_exit_not_ready() -> Result<()> {
 pub fn test_thread_join_after_panic_sets_deleted() -> Result<()> {
     log_info!(TAG, "test_thread_join_after_panic_sets_deleted");
     let mut t = Thread::new("panic", 1024, 1);
-    let s = t.spawn(None, |_, _p| { panic!("intentional"); })?;
+    let s = t.spawn(None, |_, _p| {
+        panic!("intentional");
+    })?;
     let r = s.join(core::ptr::null_mut());
     assert!(r.is_err());
     // After join, state should be Deleted
@@ -253,7 +256,10 @@ pub fn test_thread_delete_before_spawn_marks_deleted() -> Result<()> {
     t.delete();
 
     let meta = Thread::get_metadata_from_handle(handle);
-    assert!(matches!(meta.state, ThreadState::Invalid | ThreadState::Deleted));
+    assert!(matches!(
+        meta.state,
+        ThreadState::Invalid | ThreadState::Deleted
+    ));
     log_info!(TAG, "PASSED");
     Ok(())
 }
@@ -279,7 +285,10 @@ pub fn test_thread_join_unregisters_completed_thread() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 pub fn run_all_tests() -> Result<()> {
-    log_info!(TAG, "========== Running Linux-Specific Thread Tests ==========");
+    log_info!(
+        TAG,
+        "========== Running Linux-Specific Thread Tests =========="
+    );
     test_thread_handles_unique()?;
     test_thread_handle_matches_metadata()?;
     test_thread_get_metadata_from_handle_real()?;
@@ -296,6 +305,9 @@ pub fn run_all_tests() -> Result<()> {
     test_thread_delete_wakes_wait_notification()?;
     test_thread_delete_before_spawn_marks_deleted()?;
     test_thread_join_unregisters_completed_thread()?;
-    log_info!(TAG, "========== All Linux-Specific Thread Tests PASSED ==========");
+    log_info!(
+        TAG,
+        "========== All Linux-Specific Thread Tests PASSED =========="
+    );
     Ok(())
 }

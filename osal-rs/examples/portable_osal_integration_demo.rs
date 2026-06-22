@@ -39,8 +39,8 @@ use core::time::Duration;
 
 use alloc::sync::Arc;
 
-use osal_rs::os::*;
 use osal_rs::os::types::{EventBits, StackType, TickType, UBaseType};
+use osal_rs::os::*;
 use osal_rs::utils::Result;
 
 // ---------------------------------------------------------------------------
@@ -290,8 +290,11 @@ fn monitor_task(res: Arc<DemoResources>) {
             demo_log!(
                 "[monitor] tick={:5} produced={} consumed={} dropped={} timeout={} checksum_error={}",
                 System::get_tick_count(),
-                s.produced, s.consumed, s.dropped,
-                s.queue_timeout, s.checksum_error,
+                s.produced,
+                s.consumed,
+                s.dropped,
+                s.queue_timeout,
+                s.checksum_error,
             );
             System::exit_critical();
         }
@@ -350,8 +353,14 @@ fn supervisor_task(res: Arc<DemoResources>, heartbeat: Arc<Timer>) {
     // Print final summary.
     {
         let s = res.stats.lock().unwrap();
-        demo_log!("[summary] produced={} consumed={} dropped={} timeout={} checksum_error={}",
-            s.produced, s.consumed, s.dropped, s.queue_timeout, s.checksum_error);
+        demo_log!(
+            "[summary] produced={} consumed={} dropped={} timeout={} checksum_error={}",
+            s.produced,
+            s.consumed,
+            s.dropped,
+            s.queue_timeout,
+            s.checksum_error
+        );
         demo_log!("[summary] demo finished");
     }
 
@@ -439,21 +448,21 @@ pub fn demo_startup() -> Result<DemoApp> {
         Queue::new(QUEUE_CAPACITY as UBaseType, PACKET_SIZE as UBaseType)
             .map_err(|_| osal_rs::utils::Error::OutOfMemory)?,
     );
-    demo_log!("[init] queue capacity={} message_size={}", QUEUE_CAPACITY, PACKET_SIZE);
+    demo_log!(
+        "[init] queue capacity={} message_size={}",
+        QUEUE_CAPACITY,
+        PACKET_SIZE
+    );
 
     let stats = Arc::new(Mutex::new(Stats::default()));
     demo_log!("[init] stats mutex");
 
     let ready_sem = Arc::new(
-        Semaphore::new(TOTAL_READY_TASKS, 0)
-            .map_err(|_| osal_rs::utils::Error::OutOfMemory)?,
+        Semaphore::new(TOTAL_READY_TASKS, 0).map_err(|_| osal_rs::utils::Error::OutOfMemory)?,
     );
     demo_log!("[init] ready semaphore max_count={}", TOTAL_READY_TASKS);
 
-    let events = Arc::new(
-        EventGroup::new()
-            .map_err(|_| osal_rs::utils::Error::OutOfMemory)?,
-    );
+    let events = Arc::new(EventGroup::new().map_err(|_| osal_rs::utils::Error::OutOfMemory)?);
     demo_log!("[init] event group");
 
     let resources = Arc::new(DemoResources {

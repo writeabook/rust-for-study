@@ -21,7 +21,7 @@
 //! Example showing how to create a custom serializer.
 //! This example implements a simple text-based serializer.
 
-use osal_rs_serde::{Serialize, Deserialize, Serializer, Error};
+use osal_rs_serde::{Deserialize, Error, Serialize, Serializer};
 
 /// A simple text-based serializer that writes values as comma-separated strings
 struct TextSerializer<'a> {
@@ -148,11 +148,19 @@ impl<'a> Serializer for TextSerializer<'a> {
         Err(Error::Unsupported)
     }
 
-    fn serialize_vec<T: osal_rs_serde::Serialize>(&mut self, _name: &str, _v: &Vec<T>) -> Result<(), Error> {
+    fn serialize_vec<T: osal_rs_serde::Serialize>(
+        &mut self,
+        _name: &str,
+        _v: &Vec<T>,
+    ) -> Result<(), Error> {
         Err(Error::Unsupported)
     }
 
-    fn serialize_array<T: osal_rs_serde::Serialize>(&mut self, _name: &str, _v: &[T]) -> Result<(), Error> {
+    fn serialize_array<T: osal_rs_serde::Serialize>(
+        &mut self,
+        _name: &str,
+        _v: &[T],
+    ) -> Result<(), Error> {
         Err(Error::Unsupported)
     }
 }
@@ -207,7 +215,7 @@ fn main() {
     let mut buffer = [0u8; 128];
     let mut serializer = TextSerializer::new(&mut buffer);
     reading.serialize("", &mut serializer).unwrap();
-    
+
     let len = serializer.position();
     let text = core::str::from_utf8(&buffer[..len]).unwrap();
     println!("Text serialized ({} bytes): {}", len, text);
@@ -215,7 +223,11 @@ fn main() {
     // Compare with binary serializer
     let mut bin_buffer = [0u8; 128];
     let bin_len = osal_rs_serde::to_bytes(&reading, &mut bin_buffer).unwrap();
-    println!("Binary serialized ({} bytes): {:?}", bin_len, &bin_buffer[..bin_len]);
+    println!(
+        "Binary serialized ({} bytes): {:?}",
+        bin_len,
+        &bin_buffer[..bin_len]
+    );
 
     println!("\nText format is more readable but uses more space!");
     println!("Text: {} bytes, Binary: {} bytes", len, bin_len);

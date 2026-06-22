@@ -26,8 +26,8 @@ pub fn run_all_tests() -> Result<()> {
 /// Multiple threads entering the critical section must never overlap.
 fn critical_section_is_mutually_exclusive() -> Result<()> {
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     let inside = Arc::new(AtomicBool::new(false));
@@ -118,8 +118,8 @@ fn critical_section_from_isr_uses_same_lock() -> Result<()> {
 /// `enter_critical()` until the first thread releases it.
 fn critical_section_blocks_other_threads_until_exit() -> Result<()> {
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     let entered = Arc::new(AtomicBool::new(false));
