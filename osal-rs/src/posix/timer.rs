@@ -45,9 +45,7 @@ use crate::utils::{Error, OsalRsBool, Result};
 
 #[inline]
 fn ticks_to_timer_period_ms(ticks: TickType) -> u64 {
-    (ticks as u64)
-        .saturating_mul(TICK_PERIOD_MS)
-        .max(1)
+    (ticks as u64).saturating_mul(TICK_PERIOD_MS).max(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +154,20 @@ fn mgr() -> *const TimerManager {
     p
 }
 
+// -- lock / unlock helpers (assert on failure) -------------------------------
+
+#[inline]
+fn timer_lock(p: *const TimerManager) {
+    let locked = unsafe { (*p).mtx.lock() };
+    assert!(locked, "failed to lock POSIX timer manager mutex");
+}
+
+#[inline]
+fn timer_unlock(p: *const TimerManager) {
+    let unlocked = unsafe { (*p).mtx.unlock() };
+    assert!(unlocked, "failed to unlock POSIX timer manager mutex");
+}
+
 // -- worker startup ---------------------------------------------------------
 
 extern "C" fn timer_worker_entry(_arg: *mut c_void) -> *mut c_void {
@@ -164,10 +176,11 @@ extern "C" fn timer_worker_entry(_arg: *mut c_void) -> *mut c_void {
 }
 
 fn start_worker() -> sys_thread::PosixThread {
-    let thread =
-        unsafe { sys_thread::create(None, timer_worker_entry, core::ptr::null_mut()) }
-            .expect("TimerManager: pthread_create");
+    let thread = unsafe { sys_thread::create(None, timer_worker_entry, core::ptr::null_mut()) }
+        .expect("TimerManager: pthread_create");
 
+    // Detach failure is an unrecoverable init error: the worker is already
+    // running, and a joinable-but-never-joined pthread leaks resources.
     let detached = unsafe { sys_thread::detach(thread) };
     assert!(detached, "TimerManager: pthread_detach");
 
@@ -191,7 +204,7 @@ fn worker_loop() {
     let p = mgr_ptr_only();
 
     loop {
-        let _ = unsafe { (*p).mtx.lock() };
+        timer_lock(p);
 
         // ---- Step 1: collect all valid expired entries ----
         struct ExpiredTimer {
@@ -260,11 +273,11 @@ fn worker_loop() {
                     unsafe { (*p).cond.wait(&(*p).mtx) };
                 }
             }
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             continue;
         }
 
-        unsafe { (*p).mtx.unlock() };
+        timer_unlock(p);
 
         // ---- Step 3: execute callbacks OUTSIDE the lock ----
         for item in &expired {
@@ -279,7 +292,7 @@ fn worker_loop() {
         }
 
         // ---- Step 4: re-lock, apply post-callback state ----
-        let _ = unsafe { (*p).mtx.lock() };
+        timer_lock(p);
         for item in &expired {
             let Some(r) = field!(p, timers).get_mut(&item.timer_id) else {
                 continue;
@@ -305,8 +318,7 @@ fn worker_loop() {
                     }
                     CallbackCommand::None => {
                         if item.auto_reload && item.period_ms > 0 {
-                            let mut next =
-                                item.deadline_ns + clock::ms_to_ns(item.period_ms);
+                            let mut next = item.deadline_ns + clock::ms_to_ns(item.period_ms);
                             let now2 = clock::now_ns();
                             while next <= now2 {
                                 next += clock::ms_to_ns(item.period_ms);
@@ -325,7 +337,7 @@ fn worker_loop() {
                 }
             }
         }
-        unsafe { (*p).mtx.unlock() };
+        timer_unlock(p);
     }
 }
 
@@ -361,7 +373,7 @@ impl Timer {
         }
         let period_ms = ticks_to_timer_period_ms(period_ticks);
         let p = mgr();
-        let _ = unsafe { (*p).mtx.lock() };
+        timer_lock(p);
         let id = *field!(p, next_id);
         *field!(p, next_id) = id.checked_add(1).expect("Timer id overflow");
         field!(p, timers).insert(
@@ -376,7 +388,7 @@ impl Timer {
                 param,
             },
         );
-        unsafe { (*p).mtx.unlock() };
+        timer_unlock(p);
         Ok(Self {
             id,
             handle: id as TimerHandle,
@@ -440,30 +452,30 @@ unsafe fn arm(p: *const TimerManager, id: u64, period_ms: u64) -> u64 {
 impl TimerFn for Timer {
     fn start(&self, _ticks_to_wait: TickType) -> OsalRsBool {
         let p = mgr();
-        let _ = unsafe { (*p).mtx.lock() };
+        timer_lock(p);
         let Some(r) = field!(p, timers).get_mut(&self.id) else {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         };
         if r.state == TimerState::Deleted {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         }
         let _ = unsafe { arm(p, self.id, r.period_ms) };
         unsafe { (*p).cond.signal() };
-        unsafe { (*p).mtx.unlock() };
+        timer_unlock(p);
         OsalRsBool::True
     }
 
     fn stop(&self, _ticks_to_wait: TickType) -> OsalRsBool {
         let p = mgr();
-        let _ = unsafe { (*p).mtx.lock() };
+        timer_lock(p);
         let Some(r) = field!(p, timers).get_mut(&self.id) else {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         };
         if r.state == TimerState::Deleted {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         }
         match r.state {
@@ -476,19 +488,19 @@ impl TimerFn for Timer {
             }
         }
         unsafe { (*p).cond.signal() };
-        unsafe { (*p).mtx.unlock() };
+        timer_unlock(p);
         OsalRsBool::True
     }
 
     fn reset(&self, _ticks_to_wait: TickType) -> OsalRsBool {
         let p = mgr();
-        let _ = unsafe { (*p).mtx.lock() };
+        timer_lock(p);
         let Some(r) = field!(p, timers).get_mut(&self.id) else {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         };
         if r.state == TimerState::Deleted {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         }
         let period = r.period_ms;
@@ -501,7 +513,7 @@ impl TimerFn for Timer {
             }
         }
         unsafe { (*p).cond.signal() };
-        unsafe { (*p).mtx.unlock() };
+        timer_unlock(p);
         OsalRsBool::True
     }
 
@@ -511,13 +523,13 @@ impl TimerFn for Timer {
         }
         let new_period_ms = ticks_to_timer_period_ms(new_period);
         let p = mgr();
-        let _ = unsafe { (*p).mtx.lock() };
+        timer_lock(p);
         let Some(r) = field!(p, timers).get_mut(&self.id) else {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         };
         if r.state == TimerState::Deleted {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         }
         r.period_ms = new_period_ms;
@@ -525,19 +537,19 @@ impl TimerFn for Timer {
             let _ = unsafe { arm(p, self.id, new_period_ms) };
         }
         unsafe { (*p).cond.signal() };
-        unsafe { (*p).mtx.unlock() };
+        timer_unlock(p);
         OsalRsBool::True
     }
 
     fn delete(&mut self, _ticks_to_wait: TickType) -> OsalRsBool {
         let p = mgr();
-        let _ = unsafe { (*p).mtx.lock() };
+        timer_lock(p);
         let Some(r) = field!(p, timers).get_mut(&self.id) else {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         };
         if r.state == TimerState::Deleted {
-            unsafe { (*p).mtx.unlock() };
+            timer_unlock(p);
             return OsalRsBool::False;
         }
         r.generation = r.generation.wrapping_add(1);
@@ -551,7 +563,7 @@ impl TimerFn for Timer {
             field!(p, timers).remove(&self.id);
         }
         unsafe { (*p).cond.signal() };
-        unsafe { (*p).mtx.unlock() };
+        timer_unlock(p);
         OsalRsBool::True
     }
 }
