@@ -34,6 +34,7 @@ use super::config::TICK_PERIOD_MS;
 use super::types::TickType;
 use crate::traits::{FromTick, ToTick};
 
+#[cfg(not(feature = "posix"))]
 impl ToTick for TickType {
     /// Identity conversion: a raw tick count is already in ticks.
     fn to_ticks(&self) -> TickType {
@@ -41,6 +42,7 @@ impl ToTick for TickType {
     }
 }
 
+#[cfg(not(feature = "posix"))]
 impl ToTick for Duration {
     /// Converts a `Duration` into an OSAL tick count.
     ///
@@ -68,6 +70,7 @@ impl ToTick for Duration {
     }
 }
 
+#[cfg(not(feature = "posix"))]
 impl FromTick for Duration {
     /// Overwrites `self` with a `Duration` representing the given
     /// tick count.
