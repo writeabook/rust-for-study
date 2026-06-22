@@ -359,10 +359,15 @@ impl Thread {
         }
     }
 
+    // When `posix` is active the trait impl is excluded and these inherent
+    // helpers that delegate to trait methods cannot resolve their calls.
+
+    #[cfg(not(feature = "posix"))]
     pub fn get_metadata(thread: &Thread) -> ThreadMetadata {
         thread.get_metadata()
     }
 
+    #[cfg(not(feature = "posix"))]
     pub fn wait_notification_with_to_tick(&self, bits_clear_entry: u32, bits_clear_exit: u32, timeout: impl ToTick) -> Result<u32> {
         self.wait_notification(bits_clear_entry, bits_clear_exit, timeout.to_ticks())
     }
@@ -389,6 +394,7 @@ impl Thread {
     /// This is equivalent to
     /// `Thread::get_current().is_delete_requested()` but shorter to write
     /// inside thread callbacks.
+    #[cfg(not(feature = "posix"))]
     pub fn current_cancellation_requested() -> bool {
         Self::get_current().is_delete_requested()
     }
@@ -407,6 +413,7 @@ impl Thread {
         }
     }
 
+    #[cfg(not(feature = "posix"))]
     fn spawn_inner<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
     where
         F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam> + Send + Sync + 'static,
@@ -460,6 +467,7 @@ impl Thread {
         Ok(Self { core: Arc::clone(&self.core), handle: self.handle })
     }
 
+    #[cfg(not(feature = "posix"))]
     fn spawn_simple_inner<F>(&mut self, callback: F) -> Result<Self>
     where
         F: Fn() + Send + Sync + 'static,
@@ -474,8 +482,13 @@ impl Thread {
 
 // ---------------------------------------------------------------------------
 // ThreadFn implementation
+//
+// When `posix` is active, `crate::os::ThreadMetadata` resolves to
+// `posix::thread::ThreadMetadata` and this impl would produce a type
+// mismatch.  The POSIX backend provides its own implementation.
 // ---------------------------------------------------------------------------
 
+#[cfg(not(feature = "posix"))]
 impl ThreadFn for Thread {
     fn spawn<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
     where
@@ -825,9 +838,11 @@ impl Display for Thread {
 
 // ---------------------------------------------------------------------------
 // Internal poison-recovery test
+//
+// This test exercises trait methods that are excluded when `posix` is active.
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "posix")))]
 mod tests {
     use super::*;
     use std::panic::{catch_unwind, AssertUnwindSafe};
