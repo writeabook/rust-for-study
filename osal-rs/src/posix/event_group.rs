@@ -17,6 +17,7 @@ use libc::PTHREAD_MUTEX_ERRORCHECK;
 use crate::traits::{EventGroupFn, ToTick};
 use crate::utils::{Error, Result};
 
+use super::config::TICK_PERIOD_MS;
 use super::sys::clock;
 use super::sys::condvar::PosixCondvar;
 use super::sys::mutex::PosixMutex;
@@ -98,8 +99,9 @@ impl Deref for EventGroup {
 impl EventGroup {
     /// Maximum usable event bits mask.
     ///
-    /// Matches the FreeRTOS backend: the top 8 bits are reserved for
-    /// internal use, leaving 24 usable bits (56 on 64-bit platforms).
+    /// Matches the FreeRTOS-style reserved-bit model: the top 8 bits are
+    /// reserved for internal use. With the current POSIX `EventBits = u32`,
+    /// this leaves 24 usable bits.
     pub const MAX_MASK: EventBits = EventBits::MAX >> 8;
 
     /// Creates a new event group with all bits initially cleared (0).
@@ -248,7 +250,7 @@ impl EventGroupFn for EventGroup {
         }
 
         // Finite wait with CLOCK_MONOTONIC absolute deadline.
-        let timeout_ms = timeout_ticks as u64;
+        let timeout_ms = (timeout_ticks as u64).saturating_mul(TICK_PERIOD_MS);
         let deadline = clock::deadline_from_ms(timeout_ms);
 
         loop {
