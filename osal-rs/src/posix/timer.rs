@@ -2,7 +2,7 @@
 //!
 //! # Architecture (FreeRTOS Timer Service Task pattern)
 //!
-//! - One global daemon thread for ALL timers.
+//! - One global pthread daemon for ALL timers (detached, lifetime = process).
 //! - `PosixMutex` + `PosixCondvar` (CLOCK_MONOTONIC) + `BTreeMap` + `BinaryHeap`.
 //! - Generation counters for lazy invalidation of stale heap entries.
 //! - Callbacks execute outside the lock; commands during callback go through
@@ -11,13 +11,13 @@
 //!
 //! # Migration status (std → no_std)
 //!
-//! TODO(posix-no-std): The Timer Service Thread currently uses `std::thread`,
-//! `OnceLock`, and `catch_unwind` as transitional helpers.  The final POSIX
-//! core should migrate to `libc::pthread_create`, `pthread_once_t`, and
+//! TODO(posix-no-std): `OnceLock` and `catch_unwind` remain as transitional
+//! helpers.  The final POSIX core should migrate to `pthread_once_t` and
 //! `panic=abort`, with collections from `alloc`.
 
 use core::cell::UnsafeCell;
 use core::cmp::Ordering;
+use core::ffi::c_void;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
@@ -26,16 +26,29 @@ use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::sync::Arc;
 
 use std::sync::OnceLock;
-use std::thread::{Builder as ThreadBuilder, JoinHandle};
 
 use libc::PTHREAD_MUTEX_ERRORCHECK;
 
+use super::config::TICK_PERIOD_MS;
 use super::sys::clock;
 use super::sys::condvar::PosixCondvar;
 use super::sys::mutex::PosixMutex;
+use super::sys::thread as sys_thread;
 use super::types::{TickType, TimerHandle};
+
 use crate::traits::{TimerFn, TimerFnPtr, TimerParam, ToTick};
 use crate::utils::{Error, OsalRsBool, Result};
+
+// ---------------------------------------------------------------------------
+// Tick → timer-period helper
+// ---------------------------------------------------------------------------
+
+#[inline]
+fn ticks_to_timer_period_ms(ticks: TickType) -> u64 {
+    (ticks as u64)
+        .saturating_mul(TICK_PERIOD_MS)
+        .max(1)
+}
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -115,28 +128,54 @@ unsafe impl Send for TimerManager {}
 unsafe impl Sync for TimerManager {}
 
 static MGR: OnceLock<TimerManager> = OnceLock::new();
-static WORKER: OnceLock<JoinHandle<()>> = OnceLock::new();
+static WORKER: OnceLock<sys_thread::PosixThread> = OnceLock::new();
 
-fn mgr() -> *const TimerManager {
-    MGR.get_or_init(|| {
-        let mgr = TimerManager {
-            mtx: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).expect("TimerManager: mutex"),
-            cond: PosixCondvar::new().expect("TimerManager: cond"),
-            timers: UnsafeCell::new(BTreeMap::new()),
-            heap: UnsafeCell::new(BinaryHeap::new()),
-            next_id: UnsafeCell::new(1),
-        };
-        WORKER.get_or_init(|| {
-            ThreadBuilder::new()
-                .name("osal-timer-svc".into())
-                .spawn(|| worker_loop())
-                .expect("TimerManager: spawn")
-        });
-        mgr
-    }) as *const TimerManager
+// -- manager initialization (split so worker can call mgr_ptr_only safely) --
+
+fn init_manager() -> TimerManager {
+    TimerManager {
+        mtx: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).expect("TimerManager: mutex"),
+        cond: PosixCondvar::new().expect("TimerManager: cond"),
+        timers: UnsafeCell::new(BTreeMap::new()),
+        heap: UnsafeCell::new(BinaryHeap::new()),
+        next_id: UnsafeCell::new(1),
+    }
 }
 
-// Raw pointer accessors — pthread mutex provides safety
+/// Returns a pointer to the global TimerManager, initialising it on first
+/// call.  Does **not** start the worker — safe to call from `worker_loop`.
+fn mgr_ptr_only() -> *const TimerManager {
+    MGR.get_or_init(init_manager) as *const TimerManager
+}
+
+/// Returns a pointer to the global TimerManager, starting the timer service
+/// worker on first call.  Must **not** be called from `worker_loop`.
+fn mgr() -> *const TimerManager {
+    let p = mgr_ptr_only();
+    WORKER.get_or_init(start_worker);
+    p
+}
+
+// -- worker startup ---------------------------------------------------------
+
+extern "C" fn timer_worker_entry(_arg: *mut c_void) -> *mut c_void {
+    worker_loop();
+    core::ptr::null_mut()
+}
+
+fn start_worker() -> sys_thread::PosixThread {
+    let thread =
+        unsafe { sys_thread::create(None, timer_worker_entry, core::ptr::null_mut()) }
+            .expect("TimerManager: pthread_create");
+
+    let detached = unsafe { sys_thread::detach(thread) };
+    assert!(detached, "TimerManager: pthread_detach");
+
+    thread
+}
+
+// -- raw pointer accessors (pthread mutex provides safety) -------------------
+
 macro_rules! field {
     ($p:expr, $f:ident) => {
         unsafe { &mut *(*$p).$f.get() }
@@ -144,28 +183,29 @@ macro_rules! field {
 }
 
 // ---------------------------------------------------------------------------
-// Worker loop — simplified: collect ALL expired, fire OUTSIDE lock, repeat
+// Worker loop — collect ALL expired, fire OUTSIDE lock, repeat
 // ---------------------------------------------------------------------------
 
 fn worker_loop() {
-    let p = mgr();
+    // Use mgr_ptr_only() so we never recurse into worker startup.
+    let p = mgr_ptr_only();
+
     loop {
         let _ = unsafe { (*p).mtx.lock() };
 
         // ---- Step 1: collect all valid expired entries ----
-        let mut expired: Vec<(
-            u64,
-            u64,
-            Arc<TimerFnPtr>,
-            Option<TimerParam>,
-            bool,
-            u64,
-            u64,
-        )> = Vec::new();
+        struct ExpiredTimer {
+            timer_id: u64,
+            deadline_ns: u64,
+            callback: Arc<TimerFnPtr>,
+            param: Option<TimerParam>,
+            auto_reload: bool,
+            period_ms: u64,
+        }
+        let mut expired: Vec<ExpiredTimer> = Vec::new();
         let now = clock::now_ns();
 
         loop {
-            // Validate top
             let top = match field!(p, heap).peek() {
                 Some(t) => t,
                 None => break,
@@ -186,7 +226,7 @@ fn worker_loop() {
 
             if top.deadline_ns > now {
                 break;
-            } // not yet expired
+            }
 
             // Expired — pop and transition
             field!(p, heap).pop();
@@ -199,15 +239,14 @@ fn worker_loop() {
                 deadline_ns: dl,
                 command: CallbackCommand::None,
             };
-            expired.push((
-                top.timer_id,
-                dl,
-                Arc::clone(&r.callback),
-                r.param.clone(),
-                r.auto_reload,
-                r.period_ms,
-                r.id,
-            ));
+            expired.push(ExpiredTimer {
+                timer_id: top.timer_id,
+                deadline_ns: dl,
+                callback: Arc::clone(&r.callback),
+                param: r.param.clone(),
+                auto_reload: r.auto_reload,
+                period_ms: r.period_ms,
+            });
         }
 
         // ---- Step 2: if nothing expired, wait ----
@@ -228,54 +267,55 @@ fn worker_loop() {
         unsafe { (*p).mtx.unlock() };
 
         // ---- Step 3: execute callbacks OUTSIDE the lock ----
-        for &(_, _, ref cb, ref param, _, _, id) in &expired {
-            // id=0: callback handle — Drop won't call stop() on this
+        for item in &expired {
+            // id=0 so the callback-timer handle's Drop won't call delete().
             let t: Box<dyn TimerFn> = Box::new(Timer {
                 id: 0,
-                handle: id as TimerHandle,
+                handle: item.timer_id as TimerHandle,
             });
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = (cb)(t, param.clone());
+                let _ = (item.callback)(t, item.param.clone());
             }));
         }
 
         // ---- Step 4: re-lock, apply post-callback state ----
         let _ = unsafe { (*p).mtx.lock() };
-        for (timer_id, deadline_ns, _cb, _param, auto_reload, period_ms, id) in &expired {
-            let Some(r) = field!(p, timers).get_mut(id) else {
+        for item in &expired {
+            let Some(r) = field!(p, timers).get_mut(&item.timer_id) else {
                 continue;
             };
             if let TimerState::CallbackRunning { command, .. } = r.state {
                 match command {
                     CallbackCommand::Delete => {
                         r.state = TimerState::Deleted;
-                        field!(p, timers).remove(id);
+                        field!(p, timers).remove(&item.timer_id);
                     }
                     CallbackCommand::Stop => {
                         r.state = TimerState::Stopped;
                     }
                     CallbackCommand::Reset => {
-                        let dl = clock::now_ns() + clock::ms_to_ns(*period_ms);
+                        let dl = clock::now_ns() + clock::ms_to_ns(item.period_ms);
                         r.generation = r.generation.wrapping_add(1);
                         r.state = TimerState::Running { deadline_ns: dl };
                         field!(p, heap).push(TimerHeapEntry {
                             deadline_ns: dl,
-                            timer_id: *timer_id,
+                            timer_id: item.timer_id,
                             generation: r.generation,
                         });
                     }
                     CallbackCommand::None => {
-                        if *auto_reload && *period_ms > 0 {
-                            let mut next = *deadline_ns + clock::ms_to_ns(*period_ms);
+                        if item.auto_reload && item.period_ms > 0 {
+                            let mut next =
+                                item.deadline_ns + clock::ms_to_ns(item.period_ms);
                             let now2 = clock::now_ns();
                             while next <= now2 {
-                                next += clock::ms_to_ns(*period_ms);
+                                next += clock::ms_to_ns(item.period_ms);
                             }
                             r.generation = r.generation.wrapping_add(1);
                             r.state = TimerState::Running { deadline_ns: next };
                             field!(p, heap).push(TimerHeapEntry {
                                 deadline_ns: next,
-                                timer_id: *timer_id,
+                                timer_id: item.timer_id,
                                 generation: r.generation,
                             });
                         } else {
@@ -319,6 +359,7 @@ impl Timer {
         if period_ticks == 0 {
             return Err(Error::InvalidTimerPeriod);
         }
+        let period_ms = ticks_to_timer_period_ms(period_ticks);
         let p = mgr();
         let _ = unsafe { (*p).mtx.lock() };
         let id = *field!(p, next_id);
@@ -327,7 +368,7 @@ impl Timer {
             id,
             TimerRecord {
                 id,
-                period_ms: period_ticks as u64,
+                period_ms,
                 auto_reload,
                 state: TimerState::Stopped,
                 generation: 0,
@@ -468,6 +509,7 @@ impl TimerFn for Timer {
         if new_period == 0 {
             return OsalRsBool::False;
         }
+        let new_period_ms = ticks_to_timer_period_ms(new_period);
         let p = mgr();
         let _ = unsafe { (*p).mtx.lock() };
         let Some(r) = field!(p, timers).get_mut(&self.id) else {
@@ -478,9 +520,9 @@ impl TimerFn for Timer {
             unsafe { (*p).mtx.unlock() };
             return OsalRsBool::False;
         }
-        r.period_ms = new_period as u64;
+        r.period_ms = new_period_ms;
         if let TimerState::Running { .. } = r.state {
-            let _ = unsafe { arm(p, self.id, new_period as u64) };
+            let _ = unsafe { arm(p, self.id, new_period_ms) };
         }
         unsafe { (*p).cond.signal() };
         unsafe { (*p).mtx.unlock() };
