@@ -7,3 +7,4 @@
 pub mod clock;
 pub mod condvar;
 pub mod mutex;
+pub(crate) mod thread;
