@@ -28,8 +28,8 @@ use core::ffi::c_void;
 
 use libc::{
     pthread_attr_destroy, pthread_attr_init, pthread_attr_setstacksize, pthread_create,
-    pthread_equal, pthread_getspecific, pthread_join, pthread_key_create, pthread_key_delete,
-    pthread_key_t, pthread_self, pthread_setspecific, pthread_t,
+    pthread_detach, pthread_equal, pthread_getspecific, pthread_join, pthread_key_create,
+    pthread_key_delete, pthread_key_t, pthread_self, pthread_setspecific, pthread_t,
 };
 
 // ---------------------------------------------------------------------------
@@ -84,6 +84,18 @@ pub unsafe fn create(
 #[inline]
 pub unsafe fn join(thread: PosixThread) -> bool {
     libc::pthread_join(thread, core::ptr::null_mut()) == 0
+}
+
+/// Detaches a POSIX thread.
+///
+/// Detached threads cannot be joined and their resources are automatically
+/// reclaimed on exit.  This is suitable for daemon-like service threads
+/// whose lifetime is tied to the process.
+///
+/// Returns `true` on success.
+#[inline]
+pub unsafe fn detach(thread: PosixThread) -> bool {
+    pthread_detach(thread) == 0
 }
 
 /// Returns the calling thread's handle.
