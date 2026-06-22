@@ -58,8 +58,9 @@ pub unsafe fn create(
     }
 
     if let Some(sz) = stack_size {
-        if sz > 0 {
-            let _ = libc::pthread_attr_setstacksize(&mut attr, sz);
+        if sz > 0 && libc::pthread_attr_setstacksize(&mut attr, sz) != 0 {
+            libc::pthread_attr_destroy(&mut attr);
+            return None;
         }
     }
 
@@ -105,15 +106,12 @@ pub fn equal(a: PosixThread, b: PosixThread) -> bool {
 /// The associated destructor (if any) is called with the stored value when a
 /// thread exits.  Pass `None` if no cleanup is needed.
 #[inline]
-pub fn key_create(destructor: Option<unsafe extern "C" fn(*mut c_void)>) -> Option<pthread_key_t> {
+pub fn key_create(
+    destructor: Option<unsafe extern "C" fn(*mut c_void)>,
+) -> Option<pthread_key_t> {
     let mut key: pthread_key_t = 0;
-    let dtor: *const c_void = match destructor {
-        Some(f) => f as *const c_void,
-        None => core::ptr::null(),
-    };
-    // pthread_key_create expects a function pointer, not *const c_void.
-    // We pass the function pointer cast through a transmute-safe path.
-    if unsafe { pthread_key_create(&mut key, core::mem::transmute(dtor)) } == 0 {
+
+    if unsafe { pthread_key_create(&mut key, destructor) } == 0 {
         Some(key)
     } else {
         None
@@ -121,9 +119,11 @@ pub fn key_create(destructor: Option<unsafe extern "C" fn(*mut c_void)>) -> Opti
 }
 
 /// Deletes a TLS key.
+///
+/// Returns `true` on success.
 #[inline]
-pub unsafe fn key_delete(key: pthread_key_t) {
-    pthread_key_delete(key);
+pub unsafe fn key_delete(key: pthread_key_t) -> bool {
+    pthread_key_delete(key) == 0
 }
 
 /// Reads the value associated with a TLS key for the calling thread.

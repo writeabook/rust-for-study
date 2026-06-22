@@ -426,21 +426,14 @@ where
         + Sync
         + 'static,
 {
-    let ctx: Box<StartContext<F>> = unsafe { Box::from_raw(arg as *mut StartContext<F>) };
+    let StartContext {
+        id,
+        core,
+        param,
+        callback,
+    } = unsafe { *Box::from_raw(arg as *mut StartContext<F>) };
 
-    set_current_thread_id(ctx.id);
-
-    // Extract fields before the closure so we don't partially-move from Box.
-    let id = ctx.id;
-    let core = Arc::clone(&ctx.core);
-    // Safety: these fields are moved out once; we forget the Box afterwards.
-    let callback: F = unsafe { core::ptr::read(&ctx.callback) };
-    let param: Option<ThreadParam> = unsafe { core::ptr::read(&ctx.param) };
-
-    // The Box's heap memory is leaked (its fields have been moved out).
-    // This is acceptable for a thread-entry trampoline — the allocation is
-    // small (~3 pointers + usize) and the thread runs for the process lifetime.
-    core::mem::forget(ctx);
+    set_current_thread_id(id);
 
     // Mark running.
     {
@@ -455,28 +448,24 @@ where
     });
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        (callback)(boxed_self, param)
+        callback(boxed_self, param)
     }));
 
     // Mark finished.
     {
         let _g = core_lock(&core);
         let inner = unsafe { core_inner_mut(&core) };
+
         match result {
-            Ok(Ok(p)) => {
-                inner.callback_result = Some(Ok(p));
-            }
-            Ok(Err(e)) => {
-                inner.callback_result = Some(Err(e));
-            }
-            Err(_) => {
-                inner.panic_payload = true;
-            }
+            Ok(Ok(p)) => inner.callback_result = Some(Ok(p)),
+            Ok(Err(e)) => inner.callback_result = Some(Err(e)),
+            Err(_) => inner.panic_payload = true,
         }
+
         inner.state = ThreadState::Deleted;
     }
-    core.condvar.broadcast();
 
+    core.condvar.broadcast();
     core::ptr::null_mut()
 }
 
@@ -736,8 +725,14 @@ impl ThreadFn for Thread {
         };
 
         if let Some(pt) = pt {
-            unsafe {
-                sys_thread::join(pt);
+            if !unsafe { sys_thread::join(pt) } {
+                unregister_thread(self.core.id);
+
+                let _g = core_lock(&self.core);
+                let inner = unsafe { core_inner_mut(&self.core) };
+                inner.state = ThreadState::Deleted;
+
+                return Err(Error::ThreadJoinFailed);
             }
 
             let result = {
@@ -851,7 +846,10 @@ impl ThreadFn for Thread {
             3 => inner.notification_value = value,
             4 => {
                 if inner.notification_pending {
-                    self.core.inner.unlock();
+                    assert!(
+                        self.core.inner.unlock(),
+                        "failed to unlock POSIX thread core mutex"
+                    );
                     *hpw = 0;
                     return Err(Error::QueueFull);
                 }
@@ -863,7 +861,10 @@ impl ThreadFn for Thread {
             inner.waiting_notification || inner.state == ThreadState::Blocked;
         inner.notification_pending = true;
         *hpw = if was_waiting { 1 } else { 0 };
-        self.core.inner.unlock();
+        assert!(
+            self.core.inner.unlock(),
+            "failed to unlock POSIX thread core mutex"
+        );
         self.core.condvar.broadcast();
         Ok(())
     }
