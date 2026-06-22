@@ -1,12 +1,3 @@
-/***************************************************************************
- *
- * osal-rs
- * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
- *
- * ... LGPL-2.1 header ...
- *
- ***************************************************************************/
-
 //! Native POSIX FIFO queue using `pthread_mutex_t` + `pthread_cond_t`.
 //!
 //! - **Mutex**: `PosixMutex` (from `sys::mutex`).

@@ -1,12 +1,3 @@
-/***************************************************************************
- *
- * osal-rs
- * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
- *
- * ... LGPL-2.1 ...
- *
- ***************************************************************************/
-
 //! POSIX timer — single Timer Service Thread + deadline heap + lazy invalidation.
 //!
 //! # Architecture (FreeRTOS Timer Service Task pattern)
