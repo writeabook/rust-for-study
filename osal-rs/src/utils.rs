@@ -974,27 +974,21 @@ impl<const SIZE: usize> Bytes<SIZE> {
         Self::from_cstr_bytes(str.as_bytes())
     }
 
-    /// Creates a new `Bytes` instance from a C string pointer.
+    /// Creates a `Bytes` instance from a C string pointer.
     ///
-    /// Safely converts a null-terminated C string pointer into a `Bytes` instance.
-    /// If the pointer is null, returns a zero-initialized `Bytes`. The function
-    /// copies bytes from the C string into the fixed-size array, truncating if
-    /// the source is longer than `SIZE`.
-    ///
-    /// # Parameters
-    ///
-    /// * `ptr` - A pointer to a null-terminated C string (`*const c_char`)
+    /// If `ptr` is null, this returns an empty `Bytes`.
+    /// If the source string is longer than `SIZE - 1`, it is truncated and
+    /// the last byte is reserved for the NUL terminator.
     ///
     /// # Safety
     ///
-    /// While this function is not marked unsafe, it internally uses `unsafe` code
-    /// to dereference the pointer. The caller must ensure that:
-    /// - If not null, the pointer points to a valid null-terminated C string
-    /// - The memory the pointer references remains valid for the duration of the call
+    /// When `ptr` is non-null, it must point to a valid, readable,
+    /// NUL-terminated C string. The string, including the terminating NUL byte,
+    /// must be contained within a single allocation and must not be mutated for
+    /// the duration of this call.
     ///
-    /// # Returns
-    ///
-    /// A `Bytes` instance containing the C string data, or zero-initialized if the pointer is null.
+    /// Prefer the safe [`from_cstr_ref`](Self::from_cstr_ref) when you already
+    /// have a `&CStr`.
     ///
     /// # Examples
     ///
@@ -1005,15 +999,15 @@ impl<const SIZE: usize> Bytes<SIZE> {
     ///
     /// // From a CString
     /// let c_string = CString::new("Hello").unwrap();
-    /// let bytes = Bytes::<16>::from_char_ptr(c_string.as_ptr());
+    /// let bytes = unsafe { Bytes::<16>::from_char_ptr(c_string.as_ptr()) };
     ///
     /// // From a null pointer
-    /// let null_bytes = Bytes::<16>::from_char_ptr(core::ptr::null());
+    /// let null_bytes = unsafe { Bytes::<16>::from_char_ptr(core::ptr::null()) };
     /// // Returns zero-initialized Bytes
     ///
     /// // Truncation example
     /// let long_string = CString::new("This is a very long string").unwrap();
-    /// let short_bytes = Bytes::<8>::from_char_ptr(long_string.as_ptr());
+    /// let short_bytes = unsafe { Bytes::<8>::from_char_ptr(long_string.as_ptr()) };
     /// // truncated to SIZE - 1 content bytes, with NUL preserved
     /// ```
     pub unsafe fn from_char_ptr(ptr: *const c_char) -> Self {
@@ -1027,36 +1021,40 @@ impl<const SIZE: usize> Bytes<SIZE> {
 
     /// Creates a new `Bytes` instance from a C unsigned char pointer.
     ///
-    /// Safely converts a pointer to an array of unsigned chars into a `Bytes` instance. If the pointer is null, returns a zero-initialized `Bytes`. The function copies bytes from the source pointer into the fixed-size array, truncating if the source is longer than `SIZE`.
+    /// Converts a pointer to an array of unsigned chars into a `Bytes` instance.
     ///
-    /// # Parameters
-    /// * `ptr` - A pointer to an array of unsigned chars (`*const c_uchar`)
+    /// Creates a `Bytes` instance from a raw unsigned char pointer.
+    ///
+    /// This copies at most `SIZE` bytes from `ptr`. Unlike string-oriented
+    /// constructors, this method does **not** reserve space for a NUL
+    /// terminator — it is a raw byte copy.
     ///
     /// # Safety
-    /// While this function is not marked unsafe, it internally uses `unsafe` code to dereference the pointer. The caller must ensure that:
-    /// - If not null, the pointer points to a valid array of unsigned chars with at least `SIZE` bytes
-    /// - The memory the pointer references remains valid for the duration of the call
     ///
-    /// # Returns
-    /// A `Bytes` instance containing the data from the source pointer, or zero-initialized if the pointer is null.
+    /// When `ptr` is non-null, it must be valid for reads of `SIZE` bytes,
+    /// properly aligned for `c_uchar`, and the readable memory range must be
+    /// contained within a single allocation. The memory must not be mutated
+    /// for the duration of this call.
+    ///
+    /// Prefer the safe [`from_uchar_slice`](Self::from_uchar_slice) when you
+    /// already have a `&[c_uchar]`.
     ///
     /// # Examples
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     /// use core::ffi::c_uchar;
-    /// use alloc::ffi::CString;
     ///
     /// // From a C unsigned char pointer
     /// let data = [b'H', b'e', b'l', b'l', b'o', 0];
-    /// let bytes = Bytes::<16>::from_uchar_ptr(data.as_ptr());
+    /// let bytes = unsafe { Bytes::<16>::from_uchar_ptr(data.as_ptr()) };
     ///
     /// // From a null pointer
-    /// let null_bytes = Bytes::<16>::from_uchar_ptr(core::ptr::null());  
+    /// let null_bytes = unsafe { Bytes::<16>::from_uchar_ptr(core::ptr::null()) };
     /// // Returns zero-initialized Bytes
     ///
     /// // Truncation example
     /// let long_data = [b'T', b'h', b'i', b's', b' ', b'i', b's', b' ', b'v', b'e', b'r', b'y', b' ', b'l', b'o', b'n', b'g', 0];
-    /// let short_bytes = Bytes::<8>::from_uchar_ptr(long_data.as_ptr());
+    /// let short_bytes = unsafe { Bytes::<8>::from_uchar_ptr(long_data.as_ptr()) };
     /// // truncated to SIZE bytes (raw byte copy, no NUL reserved)
     /// ```
     pub unsafe fn from_uchar_ptr(ptr: *const c_uchar) -> Self {
@@ -1064,18 +1062,8 @@ impl<const SIZE: usize> Bytes<SIZE> {
             return Self::new();
         }
 
-        let mut array = [0u8; SIZE];
-
-        let mut i = 0usize;
-        for byte in unsafe { core::slice::from_raw_parts(ptr, SIZE) } {
-            if i > SIZE - 1 {
-                break;
-            }
-            array[i] = *byte;
-            i += 1;
-        }
-
-        Self(array)
+        let bytes = unsafe { core::slice::from_raw_parts(ptr, SIZE) };
+        Self::from_uchar_slice(bytes)
     }
 
     /// Creates a new `Bytes` instance from a safe `&[c_uchar]` slice.
@@ -1101,9 +1089,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
         let len = core::cmp::min(bytes.len(), SIZE);
 
         if len > 0 {
-            array[..len].copy_from_slice(unsafe {
-                core::slice::from_raw_parts(bytes.as_ptr() as *const u8, len)
-            });
+            array[..len].copy_from_slice(&bytes[..len]);
         }
 
         Self(array)
@@ -1213,26 +1199,20 @@ impl<const SIZE: usize> Bytes<SIZE> {
         }
     }
 
-    /// Creates a new `Bytes` instance from a C string pointer.
+    /// Creates a `Bytes` instance from a C string pointer.
     ///
-    /// This is a convenience wrapper around [`from_char_ptr`](Self::from_char_ptr) that directly converts a C string pointer to a `Bytes` instance.
-    /// If the pointer is null, it returns a zero-initialized `Bytes`. The function copies bytes from the C string into the fixed-size array, truncating if the source is longer than `SIZE`.
+    /// This is an alias of [`Self::from_char_ptr`].
     ///
-    /// # Parameters
-    ///
-    /// * `str` - A pointer to a null-terminated C string (`*const c_char`)
+    /// If `ptr` is null, this returns an empty `Bytes`.
+    /// If the source string is longer than `SIZE - 1`, it is truncated and
+    /// the last byte is reserved for the NUL terminator.
     ///
     /// # Safety
     ///
-    /// This method uses `unsafe` code to dereference the pointer. The caller must ensure that:
-    /// - If not null, the pointer points to a valid null-terminated C string
-    /// - The memory the pointer references remains valid for the duration of the call
-    ///
-    /// - The byte array can be safely interpreted as UTF-8 if the conversion is expected to succeed. If the byte array contains invalid UTF-8, the resulting `Bytes` instance will contain the raw bytes, and the `Display` implementation will show "Conversion error" when attempting to display it as a string.
-    ///
-    /// # Returns
-    ///
-    /// A `Bytes` instance containing the C string data, or zero-initialized if the pointer is null.
+    /// Same as [`Self::from_char_ptr`]. When `ptr` is non-null, it must point
+    /// to a valid, readable, NUL-terminated C string. The string, including the
+    /// terminating NUL byte, must be contained within a single allocation and
+    /// must not be mutated for the duration of this call.
     ///
     /// # Examples
     ///
@@ -1243,20 +1223,20 @@ impl<const SIZE: usize> Bytes<SIZE> {
     ///
     /// // From a CString
     /// let c_string = CString::new("Hello").unwrap();
-    /// let bytes = Bytes::<16>::from_cstr(c_string.as_ptr());
+    /// let bytes = unsafe { Bytes::<16>::from_cstr(c_string.as_ptr()) };
     ///
     /// // From a null pointer
-    /// let null_bytes = Bytes::<16>::from_cstr(core::ptr::null());
+    /// let null_bytes = unsafe { Bytes::<16>::from_cstr(core::ptr::null()) };
     /// // Returns zero-initialized Bytes
     ///
     /// // Truncation example
     /// let long_string = CString::new("This is a very long string").unwrap();
-    /// let short_bytes = Bytes::<8>::from_cstr(long_string.as_ptr());
+    /// let short_bytes = unsafe { Bytes::<8>::from_cstr(long_string.as_ptr()) };
     /// // truncated to SIZE - 1 content bytes, with NUL preserved
     /// ```
     #[inline]
-    pub unsafe fn from_cstr(str: *const c_char) -> Self {
-        Self::from_char_ptr(str)
+    pub unsafe fn from_cstr(ptr: *const c_char) -> Self {
+        unsafe { Self::from_char_ptr(ptr) }
     }
 
     /// Creates a new `Bytes` instance from a safe `&CStr` reference.
@@ -1467,8 +1447,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
         let write_len = core::cmp::min(bytes.len(), available);
 
         if write_len > 0 {
-            self.0[current_len..current_len + write_len]
-                .copy_from_slice(&bytes[..write_len]);
+            self.0[current_len..current_len + write_len].copy_from_slice(&bytes[..write_len]);
         }
 
         self.0[current_len + write_len] = 0;
