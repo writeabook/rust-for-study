@@ -21,8 +21,8 @@
 //! cleanup).  The core uses only `osal_rs::os::*`; no Linux-specific or
 //! FreeRTOS-specific APIs appear in the business logic.
 //!
-//! - **Linux runner** (`main` with `cfg(feature = "linux")`): calls
-//!   `demo_startup()`, waits for `DONE_BIT`, joins threads, exits.
+//! - **Host runner** (`main` with `cfg(any(feature = "linux", feature = "posix"))`):
+//!   calls `demo_startup()`, waits for `DONE_BIT`, joins threads, exits.
 //! - **FreeRTOS runner** (`freertos_demo_entry` with `cfg(feature = "freertos")`):
 //!   calls `demo_startup()`, then `System::start()`.
 //!
@@ -518,9 +518,13 @@ pub fn demo_startup() -> Result<DemoApp> {
 
 /// Linux runner — calls `demo_startup()`, waits for `DONE_BIT`, joins all
 /// threads, and exits cleanly.
-#[cfg(feature = "linux")]
+#[cfg(any(feature = "linux", feature = "posix"))]
 fn main() -> Result<()> {
+    #[cfg(feature = "linux")]
     demo_log!("[main] run portable demo on linux backend");
+
+    #[cfg(feature = "posix")]
+    demo_log!("[main] run portable demo on posix backend");
 
     let app = demo_startup()?;
 
