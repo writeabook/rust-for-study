@@ -1,19 +1,13 @@
-//! POSIX backend test module.
+//! POSIX backend test runner.
 //!
-//! These tests verify that the POSIX backend (currently a thin wrapper
-//! over the Linux reference implementation) correctly exposes all OSAL
-//! APIs and passes behavioural tests.
-//!
-//! # Structure
-//!
-//! - Common tests (from `crate::common`) — cross-backend behaviour
-//!   assertions shared with FreeRTOS and Linux.
-//! - POSIX-specific tests (future) — native POSIX primitives
-//!   (`pthread_mutex_t`, `sem_open`, `mq_open`, …) will be tested
-//!   here as individual modules are replaced.
+//! The tests in this module primarily execute the shared OSAL contract
+//! tests from `crate::common` against the POSIX backend. Backend-specific
+//! POSIX tests should be limited to implementation details that are not part
+//! of the portable OSAL contract, such as pthread stack-size clamping or
+//! CLOCK_MONOTONIC timeout behavior.
 
 // ---------------------------------------------------------------------------
-// Common cross-backend tests
+// Shared OSAL contract tests
 // ---------------------------------------------------------------------------
 
 #[test]
