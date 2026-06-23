@@ -60,19 +60,20 @@
 //! - [`event_group`] — Multi-bit event flags via PosixMutex + PosixCondvar
 //!   with CLOCK_MONOTONIC deadline wait (OR semantics).
 //! - [`queue`] — FIFO queue via PosixMutex + dual PosixCondvar
-//!   (not_empty / not_full) with CLOCK_MONOTONIC timeouts.
-//! - [`timer`] — Global timer service thread (pthread detached daemon)
-//!   with deadline heap, generation-based lazy invalidation, and
-//!   lock-free callback execution.
+//!   (not_empty / not_full) with CLOCK_MONOTONIC timeouts
+//! - [`timer`] - Timer service worker via pthread + detached daemon, with
+//!   deadline heap, generation-based lazy invalidation, and callbacks executed
+//!   outside the timer-manager lock.
 //! - [`bsp`] — Board Support Package selection (platform-specific config).
 //!
 //! # Relationship to the Linux backend
 //!
 //! The Linux backend (`crate::linux`) remains independently usable as a
 //! pure Rust reference implementation via `--features linux,std`.  The
-//! POSIX backend shares type definitions (`config`, `types`) with the
-//! Linux backend but provides its own native pthread-based trait
-//! implementations for every OSAL primitive.
+//! The POSIX backend no longer re-exports Linux modules. It has its own
+//! `config`, `types`, and native pthread-based implementations for the
+//! OSAL primitives, while the Linux backend remains a separate pure Rust
+//! reference implementation.
 
 pub mod bsp;
 pub mod config;

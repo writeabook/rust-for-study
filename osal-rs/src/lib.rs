@@ -255,9 +255,9 @@ mod freertos;
 ///
 /// This module is a pure Rust reference implementation for all OSAL traits
 /// using safe Rust standard library primitives.  It is compiled when either
-/// the `linux` or `posix` feature is active — the POSIX backend shares
-/// type definitions (`config`, `types`) with this module but provides
-/// its own native pthread-based trait implementations.
+/// the `linux` or `posix` feature is active. The POSIX backend has its
+/// own config/types modules and native pthread-based trait implementations,
+/// while Linux remains a pure Rust reference backend.
 ///
 /// Enabled with the `linux` or `posix` feature flag.
 #[cfg(any(feature = "linux", feature = "posix"))]
