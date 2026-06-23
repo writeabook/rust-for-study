@@ -589,12 +589,12 @@ impl Display for dyn AsSyncStr + '_ {
 /// let mut buffer = Bytes::<32>::new();
 ///
 /// // Create a buffer from a string
-/// let name = Bytes::<16>::new_by_str("TaskName");
+/// let name = Bytes::<16>::from_str("TaskName");
 /// println!("{}", name); // Prints "TaskName"
 ///
 /// // Create from any type that implements ToString
 /// let number = 42;
-/// let num_bytes = Bytes::<8>::new_by_string(&number);
+/// let num_bytes = Bytes::<8>::from_string(&number);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Bytes<const SIZE: usize>(pub [u8; SIZE]);
@@ -611,7 +611,7 @@ impl<const SIZE: usize> Deref for Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let bytes = Bytes::<8>::new_by_str("test");
+    /// let bytes = Bytes::<8>::from_str("test");
     /// assert_eq!(bytes[0], b't');
     /// ```
     fn deref(&self) -> &Self::Target {
@@ -657,17 +657,12 @@ impl<const SIZE: usize> Display for Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let bytes = Bytes::<16>::new_by_str("Hello");
+    /// let bytes = Bytes::<16>::from_str("Hello");
     /// println!("{}", bytes); // Prints "Hello"
     /// ```
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let str = unsafe {
-            CStr::from_ptr(self.0.as_ptr() as *const c_char)
-                .to_str()
-                .unwrap_or("Bytes::fmt() Conversion error - invalid UTF-8")
-        };
-
-        write!(f, "{}", str.to_string())
+        let str = self.as_str();
+        write!(f, "{}", str)
     }
 }
 
@@ -907,11 +902,50 @@ impl<const SIZE: usize> Bytes<SIZE> {
         Self([0u8; SIZE])
     }
 
+    /// Returns the maximum number of content bytes that can be stored while
+    /// still guaranteeing a NUL terminator at the end.
+    ///
+    /// This is `SIZE.saturating_sub(1)` — when `SIZE == 0` the capacity is 0
+    /// and no content bytes can be stored.
+    #[inline]
+    const fn cstr_capacity() -> usize {
+        SIZE.saturating_sub(1)
+    }
+
+    /// Returns a static reference to an empty C string (`"\0"`).
+    ///
+    /// Used as a safe fallback when a valid CStr cannot be formed from the
+    /// internal buffer (e.g. `SIZE == 0` or missing NUL terminator).
+    #[inline]
+    fn empty_cstr() -> &'static CStr {
+        unsafe { CStr::from_bytes_with_nul_unchecked(b"\0") }
+    }
+
+    /// Creates a new `Bytes` instance from a byte slice, reserving the last
+    /// byte as a NUL terminator.
+    ///
+    /// At most `cstr_capacity()` bytes are copied; any bytes beyond that are
+    /// silently truncated. The resulting `Bytes` is always a valid C string
+    /// (it contains at least one `\0`).
+    #[inline]
+    fn from_cstr_bytes(bytes: &[u8]) -> Self {
+        let mut array = [0u8; SIZE];
+
+        let len = core::cmp::min(bytes.len(), Self::cstr_capacity());
+
+        if len > 0 {
+            array[..len].copy_from_slice(&bytes[..len]);
+        }
+
+        Self(array)
+    }
+
     /// Creates a new `Bytes` instance from a string slice.
     ///
-    /// Copies the bytes from the input string into the fixed-size array.
-    /// If the string is shorter than `SIZE`, the remaining bytes are zero-filled.
-    /// If the string is longer, it is truncated to fit.
+    /// Copies at most `SIZE - 1` bytes from the input string into the
+    /// fixed-size array, always leaving a NUL terminator. If the string is
+    /// shorter than `SIZE`, the remaining bytes are zero-filled. If the
+    /// string is longer, it is truncated to fit within `SIZE - 1` bytes.
     ///
     /// # Parameters
     ///
@@ -919,35 +953,25 @@ impl<const SIZE: usize> Bytes<SIZE> {
     ///
     /// # Returns
     ///
-    /// A `Bytes` instance containing the string data.
+    /// A `Bytes` instance containing the string data, guaranteed to be NUL
+    /// terminated.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let short = Bytes::<16>::new_by_str("Hi");
+    /// let short = Bytes::<16>::from_str("Hi");
     /// // Internal array: [b'H', b'i', 0, 0, 0, ...]
     ///
-    /// let exact = Bytes::<5>::new_by_str("Hello");
-    /// // Internal array: [b'H', b'e', b'l', b'l', b'o']
+    /// let exact = Bytes::<5>::from_str("Hello");
+    /// // Internal array: [b'H', b'e', b'l', b'l', 0]  (last byte reserved for NUL)
     ///
-    /// let long = Bytes::<3>::new_by_str("Hello");
-    /// // Internal array: [b'H', b'e', b'l'] (truncated)
+    /// let long = Bytes::<3>::from_str("Hello");
+    /// // Internal array: [b'H', b'e', 0]  (truncated, NUL preserved)
     /// ```
     pub fn from_str(str: &str) -> Self {
-        let mut array = [0u8; SIZE];
-
-        let mut i = 0usize;
-        for byte in str.as_bytes() {
-            if i > SIZE - 1 {
-                break;
-            }
-            array[i] = *byte;
-            i += 1;
-        }
-
-        Self(array)
+        Self::from_cstr_bytes(str.as_bytes())
     }
 
     /// Creates a new `Bytes` instance from a C string pointer.
@@ -981,15 +1005,15 @@ impl<const SIZE: usize> Bytes<SIZE> {
     ///
     /// // From a CString
     /// let c_string = CString::new("Hello").unwrap();
-    /// let bytes = Bytes::<16>::new_by_ptr(c_string.as_ptr());
+    /// let bytes = Bytes::<16>::from_char_ptr(c_string.as_ptr());
     ///
     /// // From a null pointer
-    /// let null_bytes = Bytes::<16>::new_by_ptr(core::ptr::null());
+    /// let null_bytes = Bytes::<16>::from_char_ptr(core::ptr::null());
     /// // Returns zero-initialized Bytes
     ///
     /// // Truncation example
     /// let long_string = CString::new("This is a very long string").unwrap();
-    /// let short_bytes = Bytes::<8>::new_by_ptr(long_string.as_ptr());
+    /// let short_bytes = Bytes::<8>::from_char_ptr(long_string.as_ptr());
     /// // Only first 8 bytes are copied
     /// ```
     pub fn from_char_ptr(ptr: *const c_char) -> Self {
@@ -997,18 +1021,8 @@ impl<const SIZE: usize> Bytes<SIZE> {
             return Self::new();
         }
 
-        let mut array = [0u8; SIZE];
-
-        let mut i = 0usize;
-        for byte in unsafe { CStr::from_ptr(ptr) }.to_bytes() {
-            if i > SIZE - 1 {
-                break;
-            }
-            array[i] = *byte;
-            i += 1;
-        }
-
-        Self(array)
+        let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes();
+        Self::from_cstr_bytes(bytes)
     }
 
     /// Creates a new `Bytes` instance from a C unsigned char pointer.
@@ -1066,7 +1080,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
 
     /// Creates a new `Bytes` instance from any type implementing `ToString`.
     ///
-    /// This is a convenience wrapper around [`new_by_str`](Self::new_by_str)
+    /// This is a convenience wrapper around [`from_str`](Self::from_str)
     /// that first converts the input to a string.
     ///
     /// # Parameters
@@ -1083,11 +1097,11 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// use osal_rs::utils::Bytes;
     ///
     /// // From integer
-    /// let num_bytes = Bytes::<8>::new_by_string(&42);
+    /// let num_bytes = Bytes::<8>::from_string(&42);
     ///
     /// // From String
     /// let string = String::from("Task");
-    /// let str_bytes = Bytes::<16>::new_by_string(&string);
+    /// let str_bytes = Bytes::<16>::from_string(&string);
     ///
     /// // From custom type with ToString
     /// #[derive(Debug)]
@@ -1097,7 +1111,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     ///         format!("Task-{}", self.0)
     ///     }
     /// }
-    /// let task_bytes = Bytes::<16>::new_by_string(&TaskId(5));
+    /// let task_bytes = Bytes::<16>::from_string(&TaskId(5));
     /// ```
     #[inline]
     pub fn from_as_sync_str(str: &impl ToString) -> Self {
@@ -1148,7 +1162,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let bytes = Bytes::<16>::new_by_str("Hello World");
+    /// let bytes = Bytes::<16>::from_str("Hello World");
     ///
     /// let mut output = String::from("                "); // 16 spaces
     /// bytes.fill_str(unsafe { output.as_mut_str() });
@@ -1170,7 +1184,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
 
     /// Creates a new `Bytes` instance from a C string pointer.
     ///
-    /// This is a convenience wrapper around [`new_by_ptr`](Self::new_by_ptr) that directly converts a C string pointer to a `Bytes` instance.
+    /// This is a convenience wrapper around [`from_char_ptr`](Self::from_char_ptr) that directly converts a C string pointer to a `Bytes` instance.
     /// If the pointer is null, it returns a zero-initialized `Bytes`. The function copies bytes from the C string into the fixed-size array, truncating if the source is longer than `SIZE`.
     ///
     /// # Parameters
@@ -1211,23 +1225,36 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     #[inline]
     pub fn from_cstr(str: *const c_char) -> Self {
-        Self::from_bytes(unsafe { CStr::from_ptr(str) }.to_bytes())
+        Self::from_char_ptr(str)
     }
 
-    /// Converts the byte array to a C string reference.
+    /// Attempts to interpret the internal buffer as a C string.
     ///
-    /// Creates a `CStr` reference from the internal byte array, treating it as
-    /// a null-terminated C string. This is useful for passing strings to C FFI
-    /// functions that expect `*const c_char` or `&CStr`.
+    /// Searches the internal `[u8; SIZE]` for a NUL (`\0`) byte using
+    /// [`CStr::from_bytes_until_nul`]. If no NUL is found within the
+    /// fixed-size array, returns `Err(Error::StringConversionError)`.
     ///
-    /// # Safety
+    /// Unlike [`as_cstr`](Self::as_cstr), this method never reads beyond
+    /// `self.0` and is the preferred way to obtain a `&CStr` when the
+    /// caller needs to distinguish a valid C string buffer from a raw
+    /// binary buffer.
     ///
-    /// This method assumes the byte array is already null-terminated. All
-    /// constructors (`new()`, `from_str()`, `from_char_ptr()`, etc.) guarantee
-    /// this property by initializing with `[0u8; SIZE]`.
+    /// # Returns
     ///
-    /// However, if you've manually modified the array via `DerefMut`,
-    /// you must ensure the last byte remains 0.
+    /// * `Ok(&CStr)` — the buffer contains at least one NUL byte.
+    /// * `Err(Error::StringConversionError)` — no NUL byte was found.
+    pub fn try_as_cstr(&self) -> Result<&CStr> {
+        CStr::from_bytes_until_nul(&self.0).map_err(|_| Error::StringConversionError)
+    }
+
+    /// Returns a C string view of the internal buffer.
+    ///
+    /// If the buffer contains a NUL terminator, returns a `&CStr` pointing
+    /// into the buffer. If no NUL terminator exists, returns an empty C
+    /// string as a safe fallback.
+    ///
+    /// Prefer [`try_as_cstr`](Self::try_as_cstr) when the caller needs to
+    /// distinguish between valid C strings and invalid buffers.
     ///
     /// # Returns
     ///
@@ -1238,7 +1265,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let bytes = Bytes::<16>::new_by_str("Hello");
+    /// let bytes = Bytes::<16>::from_str("Hello");
     /// let c_str = bytes.as_cstr();
     ///
     /// extern "C" {
@@ -1251,7 +1278,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     #[inline]
     pub fn as_cstr(&self) -> &CStr {
-        unsafe { CStr::from_ptr(self.0.as_ptr() as *const c_char) }
+        self.try_as_cstr().unwrap_or_else(|_| Self::empty_cstr())
     }
 
     /// Converts the byte array to a C string reference, ensuring null-termination.
@@ -1277,10 +1304,13 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     #[inline]
     pub fn as_cstr_mut(&mut self) -> &CStr {
-        unsafe {
-            self.0[SIZE - 1] = 0; // Ensure null-termination
-            CStr::from_ptr(self.0.as_ptr() as *const c_char)
+        if SIZE == 0 {
+            return Self::empty_cstr();
         }
+
+        self.0[SIZE - 1] = 0;
+
+        CStr::from_bytes_until_nul(&self.0).unwrap_or_else(|_| Self::empty_cstr())
     }
 
     /// Appends a string slice to the existing content in the `Bytes` buffer.
@@ -1299,25 +1329,30 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
     /// bytes.append_str(" World");
     /// assert_eq!(bytes.as_str(), "Hello World");
     ///
     /// // Truncation when exceeding buffer size
-    /// let mut small_bytes = Bytes::<8>::new_by_str("Hi");
+    /// let mut small_bytes = Bytes::<8>::from_str("Hi");
     /// small_bytes.append_str(" there friend");
     /// assert_eq!(small_bytes.as_str(), "Hi ther");
     /// ```
     pub fn append_str(&mut self, str: &str) {
-        let current_len = self.0.iter().position(|&b| b == 0).unwrap_or(SIZE);
-        let mut i = current_len;
-        for byte in str.as_bytes() {
-            if i > SIZE - 1 {
-                break;
-            }
-            self.0[i] = *byte;
-            i += 1;
+        if SIZE == 0 {
+            return;
         }
+
+        let current_len = self.len().min(Self::cstr_capacity());
+        let available = Self::cstr_capacity().saturating_sub(current_len);
+        let write_len = core::cmp::min(str.as_bytes().len(), available);
+
+        if write_len > 0 {
+            self.0[current_len..current_len + write_len]
+                .copy_from_slice(&str.as_bytes()[..write_len]);
+        }
+
+        self.0[current_len + write_len] = 0;
     }
 
     /// Appends content from any type implementing `AsSyncStr` to the buffer.
@@ -1336,21 +1371,13 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
-    /// let other_bytes = Bytes::<8>::new_by_str(" World");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
+    /// let other_bytes = Bytes::<8>::from_str(" World");
     /// bytes.append_as_sync_str(&other_bytes);
     /// assert_eq!(bytes.as_str(), "Hello World");
     /// ```
     pub fn append_as_sync_str(&mut self, c_str: &impl AsSyncStr) {
-        let current_len = self.0.iter().position(|&b| b == 0).unwrap_or(SIZE);
-        let mut i = current_len;
-        for byte in c_str.as_str().as_bytes() {
-            if i > SIZE - 1 {
-                break;
-            }
-            self.0[i] = *byte;
-            i += 1;
-        }
+        self.append_str(c_str.as_str());
     }
 
     /// Appends raw bytes to the existing content in the `Bytes` buffer.
@@ -1369,25 +1396,30 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
     /// bytes.append_bytes(b" World");
     /// assert_eq!(bytes.as_str(), "Hello World");
     ///
     /// // Appending arbitrary bytes
-    /// let mut data = Bytes::<16>::new_by_str("Data: ");
+    /// let mut data = Bytes::<16>::from_str("Data: ");
     /// data.append_bytes(&[0x41, 0x42, 0x43]);
     /// assert_eq!(data.as_str(), "Data: ABC");
     /// ```
     pub fn append_bytes(&mut self, bytes: &[u8]) {
-        let current_len = self.0.iter().position(|&b| b == 0).unwrap_or(SIZE);
-        let mut i = current_len;
-        for byte in bytes {
-            if i > SIZE - 1 {
-                break;
-            }
-            self.0[i] = *byte;
-            i += 1;
+        if SIZE == 0 {
+            return;
         }
+
+        let current_len = self.len().min(Self::cstr_capacity());
+        let available = Self::cstr_capacity().saturating_sub(current_len);
+        let write_len = core::cmp::min(bytes.len(), available);
+
+        if write_len > 0 {
+            self.0[current_len..current_len + write_len]
+                .copy_from_slice(&bytes[..write_len]);
+        }
+
+        self.0[current_len + write_len] = 0;
     }
 
     /// Appends the content of another `Bytes` instance to this buffer.
@@ -1411,27 +1443,19 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
-    /// let other = Bytes::<8>::new_by_str(" World");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
+    /// let other = Bytes::<8>::from_str(" World");
     /// bytes.append(&other);
     /// assert_eq!(bytes.as_str(), "Hello World");
     ///
     /// // Appending from a larger buffer
-    /// let mut small = Bytes::<8>::new_by_str("Hi");
-    /// let large = Bytes::<32>::new_by_str(" there friend");
+    /// let mut small = Bytes::<8>::from_str("Hi");
+    /// let large = Bytes::<32>::from_str(" there friend");
     /// small.append(&large);
     /// assert_eq!(small.as_str(), "Hi ther");
     /// ```
     pub fn append<const OTHER_SIZE: usize>(&mut self, other: &Bytes<OTHER_SIZE>) {
-        let current_len = self.0.iter().position(|&b| b == 0).unwrap_or(SIZE);
-        let mut i = current_len;
-        for &byte in other.0.iter() {
-            if i > SIZE - 1 {
-                break;
-            }
-            self.0[i] = byte;
-            i += 1;
-        }
+        self.append_bytes(other.as_raw_bytes());
     }
 
     /// Prepends a string slice to the existing content in the `Bytes` buffer.
@@ -1449,28 +1473,17 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("World");
+    /// let mut bytes = Bytes::<16>::from_str("World");
     /// bytes.prepend_str("Hello ");
     /// assert_eq!(bytes.as_str(), "Hello World");
     ///
     /// // Truncation when exceeding buffer size
-    /// let mut small = Bytes::<8>::new_by_str("World");
+    /// let mut small = Bytes::<8>::from_str("World");
     /// small.prepend_str("Hello ");
-    /// assert_eq!(small.as_str(), "Hello Wo");
+    /// assert_eq!(small.as_str(), "Hello W");
     /// ```
     pub fn prepend_str(&mut self, str: &str) {
-        let current_len = self.0.iter().position(|&b| b == 0).unwrap_or(SIZE);
-        let prefix = str.as_bytes();
-        let prefix_len = prefix.len().min(SIZE);
-        let keep_len = (SIZE - prefix_len).min(current_len);
-        if keep_len > 0 {
-            self.0.copy_within(0..keep_len, prefix_len);
-        }
-        self.0[..prefix_len].copy_from_slice(&prefix[..prefix_len]);
-        let new_len = prefix_len + keep_len;
-        if new_len < SIZE {
-            self.0[new_len] = 0;
-        }
+        self.prepend_bytes(str.as_bytes());
     }
 
     /// Prepends content from any type implementing `AsSyncStr` to the buffer.
@@ -1488,8 +1501,8 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("World");
-    /// let prefix = Bytes::<8>::new_by_str("Hello ");
+    /// let mut bytes = Bytes::<16>::from_str("World");
+    /// let prefix = Bytes::<8>::from_str("Hello ");
     /// bytes.prepend_as_sync_str(&prefix);
     /// assert_eq!(bytes.as_str(), "Hello World");
     /// ```
@@ -1512,26 +1525,37 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("World");
+    /// let mut bytes = Bytes::<16>::from_str("World");
     /// bytes.prepend_bytes(b"Hello ");
     /// assert_eq!(bytes.as_str(), "Hello World");
     ///
     /// // Prepending arbitrary bytes
-    /// let mut data = Bytes::<16>::new_by_str("BC");
+    /// let mut data = Bytes::<16>::from_str("BC");
     /// data.prepend_bytes(&[0x41]); // 'A'
     /// assert_eq!(data.as_str(), "ABC");
     /// ```
     pub fn prepend_bytes(&mut self, bytes: &[u8]) {
-        let current_len = self.0.iter().position(|&b| b == 0).unwrap_or(SIZE);
-        let prefix_len = bytes.len().min(SIZE);
-        let keep_len = (SIZE - prefix_len).min(current_len);
+        if SIZE == 0 {
+            return;
+        }
+
+        let current_len = self.len().min(Self::cstr_capacity());
+        let prefix_len = bytes.len().min(Self::cstr_capacity());
+        let keep_len = (Self::cstr_capacity() - prefix_len).min(current_len);
+
         if keep_len > 0 {
             self.0.copy_within(0..keep_len, prefix_len);
         }
-        self.0[..prefix_len].copy_from_slice(&bytes[..prefix_len]);
+
+        if prefix_len > 0 {
+            self.0[..prefix_len].copy_from_slice(&bytes[..prefix_len]);
+        }
+
         let new_len = prefix_len + keep_len;
-        if new_len < SIZE {
-            self.0[new_len] = 0;
+        self.0[new_len] = 0;
+
+        for byte in self.0[new_len + 1..].iter_mut() {
+            *byte = 0;
         }
     }
 
@@ -1555,16 +1579,16 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("World");
-    /// let prefix = Bytes::<8>::new_by_str("Hello ");
+    /// let mut bytes = Bytes::<16>::from_str("World");
+    /// let prefix = Bytes::<8>::from_str("Hello ");
     /// bytes.prepend(&prefix);
     /// assert_eq!(bytes.as_str(), "Hello World");
     ///
     /// // Prepending from a larger buffer with truncation
-    /// let mut small = Bytes::<8>::new_by_str("end");
-    /// let large = Bytes::<32>::new_by_str("begin_");
+    /// let mut small = Bytes::<8>::from_str("end");
+    /// let large = Bytes::<32>::from_str("begin_");
     /// small.prepend(&large);
-    /// assert_eq!(small.as_str(), "begin_en");
+    /// assert_eq!(small.as_str(), "begin_e");
     /// ```
     pub fn prepend<const OTHER_SIZE: usize>(&mut self, other: &Bytes<OTHER_SIZE>) {
         let other_len = other.0.iter().position(|&b| b == 0).unwrap_or(OTHER_SIZE);
@@ -1582,7 +1606,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
     /// assert!(!bytes.is_empty());
     ///
     /// bytes.clear();
@@ -1611,7 +1635,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let bytes = Bytes::<16>::new_by_str("Hello");
+    /// let bytes = Bytes::<16>::from_str("Hello");
     /// assert_eq!(bytes.len(), 5);
     ///
     /// let empty = Bytes::<16>::new();
@@ -1641,13 +1665,13 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let bytes = Bytes::<16>::new_by_str("Hello");
+    /// let bytes = Bytes::<16>::from_str("Hello");
     /// assert_eq!(bytes.as_raw_bytes(), b"Hello");
     ///
     /// let empty = Bytes::<16>::new();
     /// assert_eq!(empty.as_raw_bytes(), b"");
     ///
-    /// let full = Bytes::<4>::new_by_str("ABCD");
+    /// let full = Bytes::<4>::from_str("ABCD");
     /// assert_eq!(full.as_raw_bytes(), b"ABCD");
     /// ```
     #[inline]
@@ -1667,7 +1691,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// let bytes = Bytes::<32>::new();
     /// assert_eq!(bytes.size(), 32);
     ///
-    /// let other = Bytes::<128>::new_by_str("Hello");
+    /// let other = Bytes::<128>::from_str("Hello");
     /// assert_eq!(other.size(), 128);
     /// ```
     #[inline]
@@ -1692,10 +1716,10 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// let empty = Bytes::<16>::new();
     /// assert!(empty.is_empty());
     ///
-    /// let bytes = Bytes::<16>::new_by_str("Hello");
+    /// let bytes = Bytes::<16>::from_str("Hello");
     /// assert!(!bytes.is_empty());
     ///
-    /// let mut cleared = Bytes::<16>::new_by_str("Test");
+    /// let mut cleared = Bytes::<16>::from_str("Test");
     /// cleared.clear();
     /// assert!(cleared.is_empty());
     /// ```
@@ -1722,7 +1746,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// let bytes = Bytes::<32>::new();
     /// assert_eq!(bytes.capacity(), 32);
     ///
-    /// let other = Bytes::<128>::new_by_str("Hello");
+    /// let other = Bytes::<128>::from_str("Hello");
     /// assert_eq!(other.capacity(), 128);
     /// ```
     #[inline]
@@ -1761,27 +1785,27 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// use osal_rs::utils::Bytes;
     ///
     /// // Same length replacement
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello World");
+    /// let mut bytes = Bytes::<16>::from_str("Hello World");
     /// bytes.replace(b"World", b"Rust!").unwrap();
     /// assert_eq!(bytes.as_str(), "Hello Rust!");
     ///
     /// // Shorter replacement
-    /// let mut bytes2 = Bytes::<16>::new_by_str("aabbcc");
+    /// let mut bytes2 = Bytes::<16>::from_str("aabbcc");
     /// bytes2.replace(b"bb", b"X").unwrap();
     /// assert_eq!(bytes2.as_str(), "aaXcc");
     ///
     /// // Longer replacement
-    /// let mut bytes3 = Bytes::<16>::new_by_str("Hi");
+    /// let mut bytes3 = Bytes::<16>::from_str("Hi");
     /// bytes3.replace(b"Hi", b"Hello").unwrap();
     /// assert_eq!(bytes3.as_str(), "Hello");
     ///
     /// // Multiple occurrences
-    /// let mut bytes4 = Bytes::<32>::new_by_str("foo bar foo");
+    /// let mut bytes4 = Bytes::<32>::from_str("foo bar foo");
     /// bytes4.replace(b"foo", b"baz").unwrap();
     /// assert_eq!(bytes4.as_str(), "baz bar baz");
     ///
     /// // Buffer overflow error
-    /// let mut small = Bytes::<8>::new_by_str("Hello");
+    /// let mut small = Bytes::<8>::from_str("Hello");
     /// assert!(small.replace(b"Hello", b"Hello World").is_err());
     /// ```
     pub fn replace(&mut self, find: &[u8], replace: &[u8]) -> Result<()> {
@@ -1789,9 +1813,14 @@ impl<const SIZE: usize> Bytes<SIZE> {
             return Ok(());
         }
 
+        if SIZE == 0 {
+            return Err(Error::StringConversionError);
+        }
+
+        let max_len = Self::cstr_capacity();
         let mut i = 0;
         loop {
-            let current_len = self.len();
+            let current_len = self.len().min(max_len);
 
             // Exit if we've reached the end
             if i >= current_len {
@@ -1804,7 +1833,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
                 let new_len = i + replace.len() + remaining_len;
 
                 // Check if replacement fits in buffer
-                if new_len > SIZE {
+                if new_len > max_len {
                     return Err(Error::StringConversionError);
                 }
 
@@ -1820,9 +1849,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
                 self.0[i..i + replace.len()].copy_from_slice(replace);
 
                 // Update null terminator position
-                if new_len < SIZE {
-                    self.0[new_len] = 0;
-                }
+                self.0[new_len] = 0;
 
                 // Clear trailing bytes if content shrunk
                 if new_len < current_len {
@@ -1854,7 +1881,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::{Bytes, ToBytes};
     ///
-    /// let bytes = Bytes::<8>::new_by_str("example");
+    /// let bytes = Bytes::<8>::from_str("example");
     /// let byte_slice = bytes.to_bytes();
     /// assert_eq!(byte_slice, b"example\0\0");
     /// ```
@@ -1877,7 +1904,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     //// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
     /// assert_eq!(bytes.pop(), Some(b'o'));
     /// assert_eq!(bytes.as_str(), "Hell");
     ///
@@ -1915,18 +1942,25 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
     /// assert_eq!(bytes.push(b'!'), Ok(()));
     /// assert_eq!(bytes.as_str(), "Hello!");
     /// ```
     pub fn push(&mut self, byte: u8) -> Result<()> {
-        let len = self.len();
-        if len >= SIZE {
-            Err(Error::StringConversionError) // Buffer is full
-        } else {
-            self.0[len] = byte;
-            Ok(())
+        if SIZE == 0 {
+            return Err(Error::StringConversionError);
         }
+
+        let len = self.len().min(Self::cstr_capacity());
+
+        if len >= Self::cstr_capacity() {
+            return Err(Error::StringConversionError);
+        }
+
+        self.0[len] = byte;
+        self.0[len + 1] = 0;
+
+        Ok(())
     }
 
     /// Pops the last byte from the buffer and returns it as a character.
@@ -1943,7 +1977,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     //// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
     /// assert_eq!(bytes.pop_char(), Some('o'));
     /// assert_eq!(bytes.as_str(), "Hell");
     ///
@@ -1976,7 +2010,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     //// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let mut bytes = Bytes::<16>::new_by_str("Hello");
+    /// let mut bytes = Bytes::<16>::from_str("Hello");
     /// assert_eq!(bytes.push_char('!'), Ok(()));
     /// assert_eq!(bytes.as_str(), "Hello!");
     ///
@@ -2004,7 +2038,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     //// ```ignore
     /// use osal_rs::utils::Bytes;
     ///
-    /// let valid_bytes = Bytes::<16>::new_by_str("Hello");
+    /// let valid_bytes = Bytes::<16>::from_str("Hello");
     /// assert!(valid_bytes.is_string());
     ///
     /// let mut invalid_bytes = Bytes::<16>::new();
@@ -2241,4 +2275,76 @@ pub fn hex_to_bytes_into_slice(hex: &str, output: &mut [u8]) -> Result<usize> {
     }
 
     Ok(hex.len() / 2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::String;
+
+    /// `from_cstr(null)` must return an empty Bytes without UB.
+    #[test]
+    fn bytes_from_cstr_null_returns_empty() {
+        let bytes = Bytes::<8>::from_cstr(core::ptr::null());
+
+        assert_eq!(bytes.len(), 0);
+        assert_eq!(bytes.as_str(), "");
+        assert_eq!(bytes.try_as_cstr().unwrap().to_bytes(), b"");
+    }
+
+    /// String constructors must reserve one byte for the NUL terminator.
+    #[test]
+    fn bytes_from_str_reserves_nul_terminator() {
+        let bytes = Bytes::<4>::from_str("ABCD");
+
+        assert_eq!(bytes.as_raw_bytes(), b"ABC");
+        assert_eq!(bytes.try_as_cstr().unwrap().to_bytes(), b"ABC");
+    }
+
+    /// `append_str` must not eat the NUL terminator.
+    #[test]
+    fn bytes_append_str_reserves_nul_terminator() {
+        let mut bytes = Bytes::<8>::from_str("Hello");
+
+        bytes.append_str("World");
+
+        assert_eq!(bytes.as_raw_bytes(), b"HelloWo");
+        assert_eq!(bytes.try_as_cstr().unwrap().to_bytes(), b"HelloWo");
+    }
+
+    /// `push` must keep a trailing NUL and must refuse when the
+    /// content region is full.
+    #[test]
+    fn bytes_push_keeps_nul_terminator() {
+        let mut bytes = Bytes::<4>::new();
+
+        assert_eq!(bytes.push(b'A'), Ok(()));
+        assert_eq!(bytes.push(b'B'), Ok(()));
+        assert_eq!(bytes.push(b'C'), Ok(()));
+        assert_eq!(bytes.push(b'D'), Err(Error::StringConversionError));
+
+        assert_eq!(bytes.as_raw_bytes(), b"ABC");
+        assert_eq!(bytes.try_as_cstr().unwrap().to_bytes(), b"ABC");
+    }
+
+    /// `Bytes<0>` must not panic in any string-oriented path.
+    #[test]
+    fn bytes_zero_size_is_safe() {
+        let mut bytes = Bytes::<0>::from_str("ABC");
+
+        assert_eq!(bytes.len(), 0);
+        assert_eq!(bytes.as_raw_bytes(), b"");
+        assert_eq!(bytes.push(b'A'), Err(Error::StringConversionError));
+        assert_eq!(bytes.as_cstr().to_bytes(), b"");
+        assert_eq!(bytes.as_cstr_mut().to_bytes(), b"");
+    }
+
+    /// `try_as_cstr` must fail when the buffer has no NUL byte.
+    #[test]
+    fn bytes_try_as_cstr_fails_without_nul() {
+        let bytes = Bytes::<4>::from_bytes(b"ABCD");
+
+        let result = bytes.try_as_cstr();
+        assert!(result.is_err());
+    }
 }
