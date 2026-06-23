@@ -25,8 +25,8 @@
 //! ## Overview
 //!
 //! OSAL-RS provides a unified, safe Rust API for working with different real-time
-//! operating systems. Currently supports FreeRTOS with planned support for POSIX
-//! and other RTOSes.
+//! operating systems. Currently supports FreeRTOS, Linux (host reference),
+//! and POSIX (native pthread) backends.
 //!
 //! ## Features
 //!
@@ -143,12 +143,14 @@
 //! - [`log`] - Logging macros
 //! - `traits` - Private module defining the trait abstractions
 //! - `freertos` - Private FreeRTOS implementation (enabled with `freertos` feature)
-//! - `posix` - Private POSIX implementation (enabled with `posix` feature, planned)
+//! - `posix` - Private POSIX implementation (enabled with `posix` feature)
+//! - `linux` - Private Linux reference implementation (enabled with `linux` feature)
 //!
 //! ## Features
 //!
 //! - `freertos` - Enable FreeRTOS support (default)
-//! - `posix` - Enable POSIX support (planned)
+//! - `posix` - Enable POSIX support with native pthread primitives
+//! - `linux` - Enable Linux host reference backend
 //! - `std` - Enable standard library support for testing
 //! - `disable_panic` - Disable the default panic handler and allocator
 //!
@@ -251,21 +253,23 @@ mod freertos;
 
 /// Linux host reference implementation.
 ///
-/// This module is the reference host implementation for all OSAL traits
-/// using safe Rust standard library primitives.  It is compiled when
-/// either the `linux` or `posix` feature is active — the POSIX backend
-/// re-exports from this module.
+/// This module is a pure Rust reference implementation for all OSAL traits
+/// using safe Rust standard library primitives.  It is compiled when either
+/// the `linux` or `posix` feature is active — the POSIX backend shares
+/// type definitions (`config`, `types`) with this module but provides
+/// its own native pthread-based trait implementations.
 ///
 /// Enabled with the `linux` or `posix` feature flag.
 #[cfg(any(feature = "linux", feature = "posix"))]
 mod linux;
 
-/// POSIX OSAL backend — thin wrapper around the Linux reference implementation.
+/// POSIX OSAL backend — native pthread implementation.
 ///
-/// Following NASA's OSAL architecture, POSIX is the adaptation layer and
-/// Linux is one BSP / reference implementation.  Individual modules can be
-/// replaced with native POSIX primitives in future phases without affecting
-/// the Linux backend.
+/// Following NASA's OSAL architecture, POSIX is the adaptation layer using
+/// `libc::pthread_*` primitives (`pthread_mutex`, `pthread_cond`,
+/// `pthread_create`, `CLOCK_MONOTONIC`).  The Linux backend remains
+/// independently usable as a pure Rust reference implementation via the
+/// `linux` feature.
 ///
 /// Enabled with the `posix` feature flag (when `linux` is not also enabled).
 #[cfg(all(feature = "posix", not(feature = "linux")))]
@@ -289,7 +293,7 @@ use crate::freertos as osal;
 #[cfg(feature = "linux")]
 use crate::linux as osal;
 
-/// Select POSIX as the active OSAL backend (thin wrapper around Linux).
+/// Select POSIX as the active OSAL backend (native pthread primitives).
 #[cfg(all(feature = "posix", not(feature = "linux")))]
 use crate::posix as osal;
 
