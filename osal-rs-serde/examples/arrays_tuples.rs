@@ -20,14 +20,14 @@
 
 //! Example showing arrays and tuples in derived structures.
 
-use osal_rs_serde::{Serialize, Deserialize, to_bytes, from_bytes};
+use osal_rs_serde::{Deserialize, Serialize, from_bytes, to_bytes};
 
 /// Telemetry packet with coordinates, samples and status
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct TelemetryPacket {
     timestamp: u64,
-    coordinates: (i32, i32, i32),  // x, y, z
-    samples: [u16; 8],              // 8 sensor readings
+    coordinates: (i32, i32, i32), // x, y, z
+    samples: [u16; 8],            // 8 sensor readings
     status: u8,
 }
 
@@ -50,7 +50,7 @@ fn main() {
     let mut buffer = [0u8; 128];
     let len = to_bytes(&packet, &mut buffer).unwrap();
     println!("\nTelemetry packet serialized: {} bytes", len);
-    
+
     // Show the byte representation
     print!("Bytes: ");
     for b in &buffer[..len] {
@@ -69,7 +69,7 @@ fn main() {
 
     // Test with different data
     println!("\n=== Second packet ===");
-    
+
     let packet2 = TelemetryPacket {
         timestamp: 1642857700,
         coordinates: (-50, -100, 150),
@@ -78,10 +78,10 @@ fn main() {
     };
 
     println!("Packet 2 coordinates: {:?}", packet2.coordinates);
-    
+
     let len = to_bytes(&packet2, &mut buffer).unwrap();
     println!("Serialized {} bytes", len);
-    
+
     let decoded: TelemetryPacket = from_bytes(&buffer[..len]).unwrap();
     println!("Decoded coordinates: {:?}", decoded.coordinates);
     assert_eq!(packet2, decoded);

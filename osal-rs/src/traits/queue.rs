@@ -78,8 +78,10 @@ use crate::utils::Result;
 ///
 /// # Memory Layout
 ///
-/// The queue capacity is fixed at creation time. Each message slot can
-/// hold up to the maximum message size specified during creation.
+/// The queue capacity is fixed at creation time. Each message slot stores
+/// exactly `message_size` bytes; posted slices and receive buffers must
+/// match this size.  Sending a shorter or longer slice, or receiving into
+/// a smaller or larger buffer, returns [`Error::InvalidMessageSize`].
 ///
 /// # Thread Safety
 ///
@@ -95,18 +97,18 @@ use crate::utils::Result;
 ///
 /// ```ignore
 /// use osal_rs::os::Queue;
-/// 
-/// // Create queue: 10 slots, 32 bytes per message
-/// let queue = Queue::new(10, 32).unwrap();
-/// 
+///
+/// // Create queue: 10 slots, 4 bytes per message
+/// let queue = Queue::new(10, 4).unwrap();
+///
 /// // Producer sends data
 /// let data = [1, 2, 3, 4];
 /// queue.post(&data, 100).unwrap();
-/// 
+///
 /// // Consumer receives data
-/// let mut buffer = [0u8; 32];
+/// let mut buffer = [0u8; 4];
 /// queue.fetch(&mut buffer, 100).unwrap();
-/// assert_eq!(&buffer[..4], &[1, 2, 3, 4]);
+/// assert_eq!(buffer, [1, 2, 3, 4]);
 /// ```
 pub trait Queue {
     /// Fetches a message from the queue (blocking).
@@ -132,7 +134,7 @@ pub trait Queue {
     ///
     /// ```ignore
     /// let mut buffer = [0u8; 16];
-    /// 
+    ///
     /// // Wait up to 1000 ticks
     /// match queue.fetch(&mut buffer, 1000) {
     ///     Ok(()) => println!("Received: {:?}", buffer),
@@ -165,7 +167,7 @@ pub trait Queue {
     /// }
     /// ```
     fn fetch_from_isr(&self, buffer: &mut [u8]) -> Result<()>;
-    
+
     /// Posts a message to the queue (blocking).
     ///
     /// Adds a new message to the end of the queue (FIFO order).
@@ -189,7 +191,7 @@ pub trait Queue {
     ///
     /// ```ignore
     /// let data = [1, 2, 3, 4];
-    /// 
+    ///
     /// // Try to send, wait up to 1000 ticks if full
     /// match queue.post(&data, 1000) {
     ///     Ok(()) => println!("Sent successfully"),
@@ -197,7 +199,7 @@ pub trait Queue {
     /// }
     /// ```
     fn post(&self, item: &[u8], time: TickType) -> Result<()>;
-    
+
     /// Posts a message from ISR context (non-blocking).
     ///
     /// ISR-safe version of `post()`. Returns immediately without blocking.
@@ -265,36 +267,36 @@ pub trait Queue {
 /// ```ignore
 /// use osal_rs::os::QueueStreamed;
 /// use osal_rs::traits::Deserialize;
-/// 
+///
 /// #[derive(Clone, Copy)]
 /// struct SensorData {
 ///     id: u32,
 ///     temperature: i16,
 ///     humidity: u8,
 /// }
-/// 
+///
 /// impl Deserialize for SensorData {
 ///     fn from_bytes(bytes: &[u8]) -> Result<Self> {
 ///         // Deserialization logic
 ///     }
 /// }
-/// 
+///
 /// let queue = QueueStreamed::<SensorData>::new(10, size_of::<SensorData>()).unwrap();
-/// 
+///
 /// // Producer
 /// let data = SensorData { id: 1, temperature: 235, humidity: 65 };
 /// queue.post(&data, 100).unwrap();
-/// 
+///
 /// // Consumer
 /// let mut received = SensorData { id: 0, temperature: 0, humidity: 0 };
 /// queue.fetch(&mut received, 100).unwrap();
 /// assert_eq!(received.id, 1);
 /// ```
 
-pub trait QueueStreamed<T> 
-where 
-    T: Deserialize + Sized {
-
+pub trait QueueStreamed<T>
+where
+    T: Deserialize + Sized,
+{
     /// Fetches a typed message from the queue (blocking).
     ///
     /// Removes and deserializes the oldest message from the queue.
@@ -318,7 +320,7 @@ where
     ///
     /// ```ignore
     /// let mut msg = Message::default();
-    /// 
+    ///
     /// match queue.fetch(&mut msg, 1000) {
     ///     Ok(()) => println!("Received message: {:?}", msg),
     ///     Err(_) => println!("No message available"),
@@ -350,7 +352,7 @@ where
     /// }
     /// ```
     fn fetch_from_isr(&self, buffer: &mut T) -> Result<()>;
-    
+
     /// Posts a typed message to the queue (blocking).
     ///
     /// Serializes and adds a new message to the end of the queue.
@@ -374,7 +376,7 @@ where
     ///
     /// ```ignore
     /// let msg = Message { id: 42, value: 100 };
-    /// 
+    ///
     /// match queue.post(&msg, 1000) {
     ///     Ok(()) => println!("Sent successfully"),
     ///     Err(_) => println!("Failed to send"),

@@ -40,8 +40,8 @@
 //! On most systems, event groups support at least 24 usable event bits.
 //! The specific number depends on the underlying RTOS implementation.
 
-use crate::utils::Result;
 use crate::os::types::{EventBits, TickType};
+use crate::utils::Result;
 
 /// Event group synchronization primitive.
 ///
@@ -59,15 +59,15 @@ use crate::os::types::{EventBits, TickType};
 /// ```ignore
 /// use osal_rs::os::EventGroup;
 /// use osal_rs::os::types::EventBits;
-/// 
+///
 /// let events = EventGroup::new().unwrap();
-/// 
+///
 /// // Task 1: Wait for specific bits
 /// let bits = events.wait(0b0011, 1000);
 /// if bits & 0b0011 == 0b0011 {
 ///     println!("Both bits 0 and 1 are set");
 /// }
-/// 
+///
 /// // Task 2: Set multiple bits
 /// events.set(0b0011);
 /// ```
@@ -84,17 +84,21 @@ pub trait EventGroup {
     ///
     /// # Returns
     ///
-    /// The event bits value before the bits were set
+    /// The event bits value after the bits were set. Note that this
+    /// is a snapshot at return time; if another task clears some bits
+    /// between the set and the return, the returned value may not
+    /// contain all requested bits.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// // Set bit 0
-    /// let old = events.set(0b0001);
-    /// 
+    /// let bits_after = events.set(0b0001);
+    /// assert_ne!(bits_after & 0b0001, 0);
+    ///
     /// // Set bit 1 (bit 0 remains set)
     /// events.set(0b0010);
-    /// 
+    ///
     /// // Now bits 0 and 1 are both set
     /// assert_eq!(events.get(), 0b0011);
     /// ```
@@ -156,23 +160,26 @@ pub trait EventGroup {
     ///
     /// # Returns
     ///
-    /// The event bits value before the bits were cleared
+    /// The event bits value after the bits were cleared. Note that this
+    /// is a snapshot at return time; if another task sets some bits
+    /// between the clear and the return, the returned value may not
+    /// reflect the cleared state.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// // Start with bits 0 and 1 set
     /// events.set(0b0011);
-    /// 
+    ///
     /// // Clear bit 0
-    /// let old = events.clear(0b0001);
-    /// assert_eq!(old, 0b0011);
-    /// 
+    /// let bits_after = events.clear(0b0001);
+    /// assert_eq!(bits_after & 0b0001, 0);
+    ///
     /// // Now only bit 1 is set
     /// assert_eq!(events.get(), 0b0010);
     /// ```
     fn clear(&self, bits: EventBits) -> EventBits;
-    
+
     /// Clears event bits from an interrupt service routine.
     ///
     /// ISR-safe version of `clear()`.
@@ -189,34 +196,35 @@ pub trait EventGroup {
 
     /// Waits for specific event bits to be set.
     ///
-    /// Blocks the calling task until ALL specified bits in the mask are set,
-    /// or until the timeout expires.
+    /// Blocks the calling task until **any** of the specified bits in the
+    /// mask are set, or until the timeout expires. The bits are **not**
+    /// cleared automatically on return.
     ///
     /// # Parameters
     ///
-    /// * `mask` - Bit mask of bits to wait for (waits for ALL bits in mask)
+    /// * `mask` - Bit mask of bits to wait for (waits for ANY bit in mask)
     /// * `timeout_ticks` - Maximum time to wait in ticks (0 = no wait, MAX = wait forever)
     ///
     /// # Returns
     ///
     /// The event bits value when the wait condition was satisfied,
-    /// or the current value if timeout occurred. Check if the mask bits
-    /// are set to determine success.
+    /// or the current value if timeout occurred. Check that at least one
+    /// bit in the mask is set to determine success:
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// // Wait for bits 0 and 2 with 1000 tick timeout
+    /// // Wait for any of bits 0 or 2 with 1000 tick timeout
     /// let result = events.wait(0b0101, 1000);
-    /// 
-    /// if result & 0b0101 == 0b0101 {
-    ///     // Success: both bits 0 and 2 are set
+    ///
+    /// if result & 0b0101 != 0 {
+    ///     // Success: at least one bit is set
     ///     println!("Condition met!");
     /// } else {
-    ///     // Timeout: not all bits were set in time
+    ///     // Timeout: no requested bits were set in time
     ///     println!("Timeout - current bits: {:#b}", result);
     /// }
-    /// 
+    ///
     /// // Wait forever for a single bit
     /// let result = events.wait(0b0001, TickType::MAX);
     /// ```
@@ -233,10 +241,10 @@ pub trait EventGroup {
     ///
     /// ```ignore
     /// let mut events = EventGroup::new().unwrap();
-    /// 
+    ///
     /// // Use event group
     /// events.set(0b0001);
-    /// 
+    ///
     /// // Clean up when done
     /// events.delete();
     /// ```

@@ -163,7 +163,8 @@ pub type TimerParam = Arc<dyn Any + Send + Sync>;
 ///     Ok(Arc::new(0u32))
 /// });
 /// ```
-pub type TimerFnPtr = dyn Fn(Box<dyn Timer>, Option<TimerParam>) -> Result<TimerParam> + Send + Sync + 'static;
+pub type TimerFnPtr =
+    dyn Fn(Box<dyn Timer>, Option<TimerParam>) -> Result<TimerParam> + Send + Sync + 'static;
 
 /// Software timer for delayed and periodic callbacks.
 ///
@@ -199,7 +200,7 @@ pub type TimerFnPtr = dyn Fn(Box<dyn Timer>, Option<TimerParam>) -> Result<Timer
 /// ```ignore
 /// use osal_rs::os::Timer;
 /// use core::time::Duration;
-/// 
+///
 /// let timer = Timer::new(
 ///     "alarm",
 ///     Duration::from_secs(5),
@@ -211,7 +212,7 @@ pub type TimerFnPtr = dyn Fn(Box<dyn Timer>, Option<TimerParam>) -> Result<Timer
 ///         Ok(None)
 ///     }
 /// ).unwrap();
-/// 
+///
 /// timer.start(0);
 /// // Expires once after 5 seconds
 /// ```
@@ -237,7 +238,7 @@ pub type TimerFnPtr = dyn Fn(Box<dyn Timer>, Option<TimerParam>) -> Result<Timer
 ///         Ok(Arc::new(0u32))
 ///     }
 /// ).unwrap();
-/// 
+///
 /// periodic.start(0);
 /// // Runs every 100ms until stopped
 /// ```
@@ -279,7 +280,7 @@ pub trait Timer {
     /// timer.start(100);
     /// ```
     fn start(&self, ticks_to_wait: TickType) -> OsalRsBool;
-    
+
     /// Stops the timer.
     ///
     /// The timer will not expire until started again with `start()` or `reset()`.
@@ -315,8 +316,8 @@ pub trait Timer {
     /// // Later, restart it
     /// timer.start(100);
     /// ```
-    fn stop(&self, ticks_to_wait: TickType)  -> OsalRsBool;
-    
+    fn stop(&self, ticks_to_wait: TickType) -> OsalRsBool;
+
     /// Resets the timer to its full period.
     ///
     /// If the timer is running, this restarts it from the beginning of its
@@ -369,13 +370,12 @@ pub trait Timer {
     /// }
     /// ```
     fn reset(&self, ticks_to_wait: TickType) -> OsalRsBool;
-    
+
     /// Changes the timer period.
     ///
-    /// Updates the timer period. The new period takes effect immediately:
-    /// - If the timer is running, it continues with the new period
-    /// - The remaining time is adjusted proportionally
-    /// - For periodic timers, future expirations use the new period
+    /// - If the timer is running, the timer is restarted from the time this
+    /// - command is processed using the new period. If the timer is stopped,
+    /// - the new period is stored and will be used when the timer is started.
     ///
     /// # Parameters
     ///
@@ -422,7 +422,7 @@ pub trait Timer {
     /// }
     /// ```
     fn change_period(&self, new_period_in_ticks: TickType, ticks_to_wait: TickType) -> OsalRsBool;
-    
+
     /// Deletes the timer and frees its resources.
     ///
     /// Terminates the timer and releases its resources. After deletion,

@@ -22,7 +22,8 @@ OSAL-RS provides a unified API for developing multi-platform embedded applicatio
 
 - ✅ **FreeRTOS**: Fully implemented and tested
 - ✅ **Serialization**: Complete osal-rs-serde implementation with derive macros
-- 🚧 **POSIX**: Planned for future releases
+- ✅ **POSIX**: Native pthread backend (mutex, semaphore, queue, event-group, thread, timer, system)
+- ✅ **Linux**: Host reference backend for development and CI
 - 🚧 **Other RTOSes**: Under consideration
 
 ## Features
@@ -411,8 +412,8 @@ cargo build --release --target thumbv7em-none-eabihf --features freertos
 ### For native development/testing:
 
 ```bash
-# Build with POSIX support
-cargo build --no-default-features --features posix
+# Build with POSIX support (when implemented)
+cargo build --features posix,std
 ```
 
 ## Cargo Features
@@ -424,7 +425,9 @@ OSAL-RS provides several Cargo features to customize the build configuration for
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `freertos` | ✅ | Enable FreeRTOS backend implementation. This is the default and fully implemented feature for embedded RTOS development. |
-| `posix` | ❌ | Enable POSIX/native backend implementation for host environments. |
+| `posix` | ❌ | Enable POSIX backend with native pthread primitives (`pthread_mutex`, `pthread_cond`, `pthread_create`, `CLOCK_MONOTONIC`). Requires `std`. |
+| `std` | ❌ | Enable standard library support. Automatically enables `disable_panic`. Use this for native development and testing environments. |
+| `disable_panic` | ❌ | Disable custom panic handler. Enabled automatically when `std` feature is active. Useful when you want to use the default panic behavior. |
 | `serde` | ❌ | Enable serialization/deserialization support via `osal-rs-serde`. Includes derive macros for automatic implementation. |
 
 ### Feature Combinations
@@ -439,14 +442,14 @@ cargo build --target thumbv7em-none-eabihf --features freertos
 cargo build --target thumbv7em-none-eabihf --features freertos,serde
 ```
 
-#### Native Development (POSIX)
+#### Native Development with Standard Library
 ```bash
-cargo build --no-default-features --features posix
+cargo build --features posix,std
 ```
 
 #### Native Development with Serialization
 ```bash
-cargo build --no-default-features --features posix,serde
+cargo build --features posix,std,serde
 ```
 
 ### Using Features in Cargo.toml
@@ -459,6 +462,52 @@ osal-rs = { version = "0.4", features = ["freertos"] }
 
 # Or with serialization support
 osal-rs = { version = "0.4", features = ["freertos", "serde"] }
+```
+
+## Testing Strategy
+
+The test suite follows a NASA OSAL-style four-layer structure:
+
+### 1. Contract Tests (`osal-rs-tests/src/common/`)
+
+Shared behavioural tests that every backend must pass.  These verify the
+trait contracts (mutex lock/unlock, semaphore wait/signal, queue timeout,
+event-group set/wait/clear, thread spawn/join/notify, timer lifecycle,
+system delay/tick).  Contract tests are **backend-agnostic** — they never
+reference `pthread`, `std::thread`, or FreeRTOS C APIs.
+
+```bash
+# Run contract tests against the POSIX backend
+cargo test -p osal-rs-tests --no-default-features --features posix
+
+# Run contract tests against the Linux backend
+cargo test -p osal-rs-tests --no-default-features --features linux
+```
+
+### 2. Backend Runners (`osal-rs-tests/src/{linux,posix,freertos}/`)
+
+Thin `#[test]` entry points that execute the shared contract suite
+(`crate::common`) against a specific backend.  The POSIX runner also
+accepts a small number of backend-specific edge tests (e.g. pthread
+stack-size clamping, `CLOCK_MONOTONIC` timeout precision).
+
+### 3. Backend-Specific Edge Tests
+
+Implementation-detail tests that are **not** portable across backends.
+Examples: `PTHREAD_STACK_MIN` clamping in the POSIX sys thread layer,
+`_from_isr` try-lock fast-path behaviour on the host.  These live in
+backend-specific modules and are clearly named (e.g.
+`posix/sys_thread_tests.rs`).
+
+### 4. Portable Integration Demo (`osal-rs/examples/`)
+
+A single application that compiles and runs against multiple backends
+with no code changes.  Validates the core OSAL promise: same API,
+different OS.
+
+```bash
+# Run the portable demo on the POSIX backend
+cargo run --example portable_osal_integration_demo --no-default-features --features posix
 ```
 
 ## Project Structure

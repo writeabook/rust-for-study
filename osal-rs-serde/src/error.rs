@@ -20,7 +20,7 @@
 
 //! Error types for serialization and deserialization operations.
 
-use core::fmt::{self, Display, Debug};
+use core::fmt::{self, Debug, Display};
 
 /// Result type for serialization/deserialization operations.
 pub type Result<T> = core::result::Result<T, Error>;
@@ -30,22 +30,22 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub enum Error {
     /// Buffer is too small for the operation
     BufferTooSmall,
-    
+
     /// Unexpected end of data
     UnexpectedEof,
-    
+
     /// Invalid data format encountered
     InvalidData,
-    
+
     /// Type mismatch during deserialization
     TypeMismatch,
-    
+
     /// Value out of valid range
     OutOfRange,
-    
+
     /// Custom error with a static message
     Custom(&'static str),
-    
+
     /// Unsupported operation
     Unsupported,
 }

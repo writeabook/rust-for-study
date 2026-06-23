@@ -52,9 +52,9 @@
 
 use core::time::Duration;
 
-use crate::os::types::{BaseType, TickType, UBaseType};
-use crate::os::{ThreadState};
 use crate::os::SystemState;
+use crate::os::ThreadState;
+use crate::os::types::{BaseType, TickType, UBaseType};
 use crate::utils::OsalRsBool;
 
 /// System-level RTOS operations.
@@ -74,13 +74,13 @@ use crate::utils::OsalRsBool;
 ///
 /// ```ignore
 /// use osal_rs::os::System;
-/// 
+///
 /// // Start the scheduler (does not return)
 /// System::start();
-/// 
+///
 /// // In a task:
 /// System::delay(100);  // Delay for 100 ticks
-/// 
+///
 /// // Critical section
 /// System::enter_critical();
 /// // Access shared data
@@ -109,7 +109,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, Thread};
-    /// 
+    ///
     /// // Create tasks
     /// let mut task = Thread::new("main_task", 1024, 1);
     /// task.spawn_simple(|| {
@@ -118,14 +118,14 @@ pub trait System {
     ///         // Task work
     ///     }
     /// }).ok();
-    /// 
+    ///
     /// // Start scheduler - DOES NOT RETURN
     /// System::start();
-    /// 
+    ///
     /// // This line is never reached
     /// ```
     fn start();
-    
+
     /// Gets the current scheduler state.
     ///
     /// Returns the current operational state of the RTOS scheduler.
@@ -138,7 +138,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::{System, ThreadState};
-    /// 
+    ///
     /// let state = System::get_state();
     /// match state {
     ///     ThreadState::Running => println!("Scheduler running"),
@@ -147,7 +147,7 @@ pub trait System {
     /// }
     /// ```
     fn get_state() -> ThreadState;
-    
+
     /// Suspends all tasks.
     ///
     /// Pauses the scheduler, preventing any task switches. The current task
@@ -169,14 +169,14 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// System::suspend_all();
     /// // Critical operations where task switches must not occur
     /// // Interrupts still occur but won't cause task switches
     /// System::resume_all();
     /// ```
     fn suspend_all();
-    
+
     /// Resumes all tasks.
     ///
     /// Re-enables the scheduler after `suspend_all()`. If there were nested
@@ -195,7 +195,7 @@ pub trait System {
     /// let nesting = System::resume_all();
     /// ```
     fn resume_all() -> BaseType;
-    
+
     /// Stops the scheduler.
     ///
     /// Halts task scheduling permanently. Behavior is implementation-specific.
@@ -206,7 +206,7 @@ pub trait System {
     /// This may not be supported on all RTOS implementations. After calling
     /// this, the system may need to be reset to resume normal operation.
     fn stop();
-    
+
     /// Gets the current system tick count.
     ///
     /// Returns the number of ticks since the scheduler started. The tick
@@ -225,7 +225,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let start = System::get_tick_count();
     /// // Perform work
     /// do_some_work();
@@ -233,7 +233,7 @@ pub trait System {
     /// println!("Work took {} ticks", elapsed);
     /// ```
     fn get_tick_count() -> TickType;
-    
+
     /// Gets current system time in microseconds.
     ///
     /// Returns a high-resolution timestamp based on the system tick count
@@ -247,14 +247,14 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let start = System::get_current_time_us();
     /// perform_operation();
     /// let elapsed = System::get_current_time_us() - start;
     /// println!("Operation took {} µs", elapsed.as_micros());
     /// ```
-    fn get_current_time_us () -> Duration;
-    
+    fn get_current_time_us() -> Duration;
+
     /// Converts duration to tick count.
     ///
     /// Converts a `Duration` into the equivalent number of RTOS ticks.
@@ -274,13 +274,13 @@ pub trait System {
     /// ```ignore
     /// use core::time::Duration;
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let duration = Duration::from_millis(100);
     /// let ticks = System::get_us_from_tick(&duration);
     /// System::delay(ticks);
     /// ```
     fn get_us_from_tick(duration: &Duration) -> TickType;
-    
+
     /// Gets the number of threads in the system.
     ///
     /// Returns the total count of all tasks/threads currently registered
@@ -294,12 +294,12 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let count = System::count_threads();
     /// println!("System has {} threads", count);
     /// ```
     fn count_threads() -> usize;
-    
+
     /// Gets information about all threads.
     ///
     /// Returns detailed information about all tasks in the system including
@@ -318,7 +318,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let sys_state = System::get_all_thread();
     /// for thread in &sys_state.threads {
     ///     println!("Thread: {} Priority: {} State: {:?}",
@@ -326,7 +326,7 @@ pub trait System {
     /// }
     /// ```
     fn get_all_thread() -> SystemState;
-    
+
     /// Delays the calling task for specified ticks.
     ///
     /// Blocks the calling task for at least the specified number of ticks,
@@ -345,14 +345,14 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// loop {
     ///     System::delay(100);  // Delay for 100 ticks
     ///     perform_periodic_task();
     /// }
     /// ```
     fn delay(ticks: TickType);
-    
+
     /// Delays until an absolute time.
     ///
     /// Used for implementing periodic tasks with precise timing. Unlike `delay()`,
@@ -375,7 +375,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let mut last_wake = System::get_tick_count();
     /// loop {
     ///     System::delay_until(&mut last_wake, 100);
@@ -384,7 +384,7 @@ pub trait System {
     /// }
     /// ```
     fn delay_until(previous_wake_time: &mut TickType, time_increment: TickType);
-    
+
     /// Enters a critical section.
     ///
     /// Disables interrupts or scheduler to create an atomic section.
@@ -405,13 +405,13 @@ pub trait System {
     /// System::critical_section_exit();
     /// ```
     fn critical_section_enter();
-    
+
     /// Exits a critical section.
     ///
     /// Re-enables interrupts/scheduling after `critical_section_enter()`.
     /// Must be called from the same context that called `critical_section_enter()`.
     fn critical_section_exit();
-    
+
     /// Checks if a timer has expired.
     ///
     /// Utility function to check if a specified duration has elapsed
@@ -432,10 +432,10 @@ pub trait System {
     /// ```ignore
     /// use core::time::Duration;
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let start = System::get_current_time_us();
     /// let timeout = Duration::from_millis(100);
-    /// 
+    ///
     /// loop {
     ///     if System::check_timer(&start, &timeout).into() {
     ///         println!("Timer expired!");
@@ -445,7 +445,7 @@ pub trait System {
     /// }
     /// ```
     fn check_timer(timestamp: &Duration, time: &Duration) -> OsalRsBool;
-    
+
     /// Yields to scheduler from ISR if needed.
     ///
     /// Requests a context switch from ISR context if a higher priority
@@ -465,7 +465,7 @@ pub trait System {
     /// System::yield_from_isr(higher_priority_woken);
     /// ```
     fn yield_from_isr(higher_priority_task_woken: BaseType);
-    
+
     /// Ends ISR with potential context switch.
     ///
     /// Marks the end of an ISR and performs a context switch if required.
@@ -476,8 +476,8 @@ pub trait System {
     ///
     /// * `switch_required` - Flag indicating if context switch is required
     ///   (non-zero value triggers switch)
-    fn end_switching_isr( switch_required: BaseType );
-    
+    fn end_switching_isr(switch_required: BaseType);
+
     /// Enters a critical section at task level.
     ///
     /// Disables scheduler and interrupts to protect shared resources.
@@ -500,7 +500,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// System::enter_critical();
     /// // Access shared resource safely
     /// shared_counter += 1;
@@ -522,7 +522,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// System::enter_critical();
     /// // Critical section code
     /// shared_data.update();
@@ -549,7 +549,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// // In an interrupt handler
     /// let saved_status = System::enter_critical_from_isr();
     /// // Critical ISR code - access shared data
@@ -576,7 +576,7 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let saved = System::enter_critical_from_isr();
     /// // Protected ISR operations
     /// update_shared_buffer();
@@ -603,14 +603,13 @@ pub trait System {
     ///
     /// ```ignore
     /// use osal_rs::os::System;
-    /// 
+    ///
     /// let free = System::get_free_heap_size();
     /// println!("Free heap: {} bytes", free);
-    /// 
+    ///
     /// if free < 1024 {
     ///     println!("Warning: Low memory!");
     /// }
     /// ```
     fn get_free_heap_size() -> usize;
-    
 }

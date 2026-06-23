@@ -18,32 +18,72 @@
  *
  ***************************************************************************/
 
-#[cfg(feature = "posix")]
+//! POSIX OSAL backend — native pthread implementation.
+//!
+//! This module provides the POSIX (host) backend for OSAL-RS, built on
+//! `libc::pthread_*` primitives (`pthread_mutex`, `pthread_cond`,
+//! `pthread_create`, `CLOCK_MONOTONIC`).  It is NOT a thin wrapper over
+//! the Linux backend — each module has its own native implementation.
+//!
+//! # Architecture (NASA OSAL pattern)
+//!
+//! Following NASA's OSAL architecture, **POSIX is the adaptation layer**
+//! and **Linux is one BSP / reference implementation**:
+//!
+//! ```text
+//!   Application code
+//!        ↓
+//!   pub mod os  (unified API)
+//!        ↓
+//!   posix/      (POSIX adaptation — native pthread primitives)
+//!        ↓
+//!   posix/sys/  (thin FFI wrappers — PosixMutex, PosixCondvar, clock)
+//!        ↓
+//!   libc::pthread_*, clock_gettime(CLOCK_MONOTONIC)
+//! ```
+//!
+//! # Modules
+//!
+//! - [`sys`] — Low-level POSIX wrappers (PosixMutex, PosixCondvar, clock,
+//!   thread create/join/TLS).
+//! - [`config`] — Logical tick period (`TICK_PERIOD_MS = 1`).
+//! - [`types`] — Backend type aliases (TickType, handle types, etc.).
+//! - [`duration`] — `ToTick` / `FromTick` with nanosecond ceiling rounding.
+//! - [`system`] — System operations (monotonic timing, nanosleep delays,
+//!   recursive critical-section mutex, scheduler/ISR no-ops).
+//! - [`thread`] — Thread lifecycle via `pthread_create`/`pthread_join`,
+//!   pthread TLS for current-thread lookup, cooperative cancellation,
+//!   task notifications via PosixMutex + PosixCondvar.
+//! - [`mutex`] — `RawMutex` (PTHREAD_MUTEX_RECURSIVE) and `Mutex<T>`
+//!   (PTHREAD_MUTEX_ERRORCHECK + UnsafeCell<Box<T>>).
+//! - [`semaphore`] — Counting semaphore via PosixMutex + PosixCondvar + count.
+//! - [`event_group`] — Multi-bit event flags via PosixMutex + PosixCondvar
+//!   with CLOCK_MONOTONIC deadline wait (OR semantics).
+//! - [`queue`] — FIFO queue via PosixMutex + dual PosixCondvar
+//!   (not_empty / not_full) with CLOCK_MONOTONIC timeouts
+//! - [`timer`] - Timer service worker via pthread + detached daemon, with
+//!   deadline heap, generation-based lazy invalidation, and callbacks executed
+//!   outside the timer-manager lock.
+//! - [`bsp`] — Board Support Package selection (platform-specific config).
+//!
+//! # Relationship to the Linux backend
+//!
+//! The Linux backend (`crate::linux`) remains independently usable as a
+//! pure Rust reference implementation via `--features linux,std`.  The
+//! The POSIX backend no longer re-exports Linux modules. It has its own
+//! `config`, `types`, and native pthread-based implementations for the
+//! OSAL primitives, while the Linux backend remains a separate pure Rust
+//! reference implementation.
+
+pub mod bsp;
 pub mod config;
-
-#[cfg(feature = "posix")]
 pub(crate) mod duration;
-
-#[cfg(feature = "posix")]
 pub mod event_group;
-
-#[cfg(feature = "posix")]
 pub mod mutex;
-
-#[cfg(feature = "posix")]
 pub mod queue;
-
-#[cfg(feature = "posix")]
 pub mod semaphore;
-
-#[cfg(feature = "posix")]
+pub(crate) mod sys;
 pub mod system;
-
-#[cfg(feature = "posix")]
 pub mod thread;
-
-#[cfg(feature = "posix")]
 pub mod timer;
-
-#[cfg(feature = "posix")]
 pub mod types;

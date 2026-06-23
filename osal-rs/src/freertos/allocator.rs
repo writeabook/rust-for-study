@@ -40,7 +40,7 @@
 //! ```ignore
 //! use alloc::vec::Vec;
 //! use alloc::string::String;
-//! 
+//!
 //! // All allocations use FreeRTOS heap
 //! let v = Vec::new();
 //! let s = String::from("Hello");
@@ -51,11 +51,10 @@
 //! The allocator relies on FreeRTOS heap being properly configured in
 //! FreeRTOSConfig.h with appropriate heap implementation (heap_4.c, heap_5.c, etc.)
 
-use core::ffi::c_void;
 use core::alloc::{GlobalAlloc, Layout};
+use core::ffi::c_void;
 
 use crate::freertos::ffi::{pvPortMalloc, vPortFree};
-
 
 /// Global memory allocator using FreeRTOS heap.
 ///
@@ -83,10 +82,7 @@ unsafe impl GlobalAlloc for Allocator {
     ///
     /// Returns uninitialized memory. Caller must initialize before use.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe {
-            pvPortMalloc(layout.size()) as *mut u8
-        }
-        
+        unsafe { pvPortMalloc(layout.size()) as *mut u8 }
     }
 
     /// Frees memory previously allocated by `alloc`.
@@ -122,17 +118,16 @@ unsafe impl GlobalAlloc for Allocator {
     ///
     /// ```ignore
     /// use core::alloc::{Layout, GlobalAlloc};
-    /// 
+    ///
     /// let layout = Layout::from_size_align(1024, 4).unwrap();
     /// let ptr = allocator.alloc_zeroed(layout);
     /// // All 1024 bytes are guaranteed to be zero
     /// ```
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        
         let ptr = unsafe { self.alloc(layout) };
         unsafe {
             if !ptr.is_null() {
-                core::ptr::write_bytes( ptr as *mut c_void, 0, layout.size());
+                core::ptr::write_bytes(ptr as *mut c_void, 0, layout.size());
             }
         }
         ptr

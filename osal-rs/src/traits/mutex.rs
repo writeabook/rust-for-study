@@ -114,24 +114,20 @@ where
     /// Attempts to acquire the lock without blocking. Must only be
     /// called from interrupt service routine context.
     ///
+    /// **WARNING:** On the FreeRTOS backend, recursive mutexes cannot be used
+    /// from ISR context. This method always returns `False` on FreeRTOS.
+    /// Use a semaphore or critical section for ISR synchronization instead.
+    /// The Linux backend implements this as a non-blocking try-lock.
+    ///
     /// # Returns
     ///
     /// * `True` - Lock was successfully acquired
-    /// * `False` - Lock is currently held by another task
+    /// * `False` - Lock is currently held by another task, or ISR mutex
+    ///   operations are not supported on this backend
     ///
     /// # Note
     ///
     /// This is a try-lock operation that returns immediately.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // In ISR handler
-    /// if raw_mutex.lock_from_isr() {
-    ///     // Quick critical operation
-    ///     raw_mutex.unlock_from_isr();
-    /// }
-    /// ```
     fn lock_from_isr(&self) -> OsalRsBool;
 
     /// Unlocks the mutex.
@@ -155,10 +151,15 @@ where
     /// Releases the mutex that was previously acquired by `lock_from_isr()`.
     /// Must only be called from interrupt context.
     ///
+    /// **WARNING:** On the FreeRTOS backend, recursive mutexes cannot be used
+    /// from ISR context. This method always returns `False` on FreeRTOS.
+    /// Use a semaphore or critical section for ISR synchronization instead.
+    /// The Linux backend implements this as a non-blocking unlock.
+    ///
     /// # Returns
     ///
     /// * `True` - Unlock succeeded
-    /// * `False` - Unlock failed
+    /// * `False` - Unlock failed, or ISR mutex operations are not supported
     fn unlock_from_isr(&self) -> OsalRsBool;
 
     /// Deletes the mutex and frees its resources.
@@ -210,20 +211,19 @@ pub trait MutexGuard<'a, T: ?Sized + 'a> {
     /// ```ignore
     /// use osal_rs::os::Mutex;
     /// use osal_rs::traits::MutexGuard;
-    /// 
+    ///
     /// let mutex = Mutex::new(0);
     /// let mut guard = mutex.lock().unwrap();
-    /// 
+    ///
     /// // Update with new value
     /// guard.update(&42);
     /// assert_eq!(*guard, 42);
-    /// 
+    ///
     /// // Lock is automatically released when guard drops
     /// ```
     fn update(&mut self, t: &T)
     where
         T: Clone;
-
 }
 
 /// High-level mutex trait with type-safe data protection.
@@ -258,9 +258,15 @@ pub trait MutexGuard<'a, T: ?Sized + 'a> {
 /// ```
 pub trait Mutex<T: ?Sized> {
     /// The guard type for normal mutex locks
-    type Guard<'a>: MutexGuard<'a, T> where Self: 'a, T: 'a;
+    type Guard<'a>: MutexGuard<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
     /// The guard type for ISR-context mutex locks
-    type GuardFromIsr<'a>: MutexGuard<'a, T> where Self: 'a, T: 'a;
+    type GuardFromIsr<'a>: MutexGuard<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
 
     /// Acquires the mutex, blocking the current task until it is able to do so.
     ///
@@ -287,17 +293,23 @@ pub trait Mutex<T: ?Sized> {
     /// // Lock automatically released when guard goes out of scope
     /// ```
     fn lock(&self) -> Result<Self::Guard<'_>>;
-    
+
     /// Acquires the mutex from ISR context.
     ///
     /// This is a non-blocking attempt to acquire the mutex, suitable for
     /// use in interrupt service routines. Returns immediately whether or
     /// not the lock was acquired.
     ///
+    /// **WARNING:** On the FreeRTOS backend, recursive mutexes cannot be used
+    /// from ISR context. This method always returns `Err(Error::MutexLockFailed)`
+    /// on FreeRTOS. Use a semaphore or critical section for ISR synchronization instead.
+    /// The Linux backend implements this as a non-blocking try-lock.
+    ///
     /// # Returns
     ///
     /// * `Ok(GuardFromIsr)` - Lock acquired successfully
-    /// * `Err(Error)` - Lock is currently held, try again later
+    /// * `Err(Error::MutexLockFailed)` - Lock is currently held, or ISR mutex
+    ///   operations are not supported on this backend
     ///
     /// # Examples
     ///
@@ -333,9 +345,9 @@ pub trait Mutex<T: ?Sized> {
     /// let data = mutex.into_inner().unwrap();
     /// assert_eq!(data, vec![1, 2, 3]);
     /// ```
-    fn into_inner(self) -> Result<T> 
-    where 
-        Self: Sized, 
+    fn into_inner(self) -> Result<T>
+    where
+        Self: Sized,
         T: Sized;
 
     /// Returns a mutable reference to the underlying data.

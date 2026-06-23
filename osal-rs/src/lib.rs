@@ -25,8 +25,8 @@
 //! ## Overview
 //!
 //! OSAL-RS provides a unified, safe Rust API for working with different real-time
-//! operating systems. Currently supports FreeRTOS with planned support for POSIX
-//! and other RTOSes.
+//! operating systems. Currently supports FreeRTOS, Linux (host reference),
+//! and POSIX (native pthread) backends.
 //!
 //! ## Features
 //!
@@ -61,7 +61,7 @@
 //!     ).unwrap();
 //!
 //!     thread.start().unwrap();
-//!     
+//!
 //!     // Start the scheduler
 //!     System::start();
 //! }
@@ -143,13 +143,16 @@
 //! - [`log`] - Logging macros
 //! - `traits` - Private module defining the trait abstractions
 //! - `freertos` - Private FreeRTOS implementation (enabled with `freertos` feature)
-//! - `posix` - Private POSIX implementation (enabled with `posix` feature, planned)
+//! - `posix` - Private POSIX implementation (enabled with `posix` feature)
+//! - `linux` - Private Linux reference implementation (enabled with `linux` feature)
 //!
 //! ## Features
 //!
 //! - `freertos` - Enable FreeRTOS support (default)
-//! - `posix` - Enable POSIX support (planned)
-//! - `posix` - Enable host/POSIX support (uses standard library)
+//! - `posix` - Enable POSIX support with native pthread primitives
+//! - `linux` - Enable Linux host reference backend
+//! - `std` - Enable standard library support for testing
+//! - `disable_panic` - Disable the default panic handler and allocator
 //!
 //! ## Requirements
 //!
@@ -217,12 +220,27 @@
 //!
 //! LGPL-2.1-or-later - See LICENSE file for details
 
-#![cfg_attr(not(feature = "posix"), no_std)]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
-#[cfg(not(any(feature = "freertos", feature = "posix")))]
-compile_error!("Enable either the `freertos` backend or the `posix` host backend.");
+// ---------------------------------------------------------------------------
+// Backend mutual-exclusion guard
+// ---------------------------------------------------------------------------
+#[cfg(any(
+    all(feature = "freertos", feature = "linux"),
+    all(feature = "freertos", feature = "posix"),
+    all(feature = "linux", feature = "posix"),
+))]
+compile_error!(
+    "Only one OSAL backend feature may be enabled at a time (freertos | linux | posix)."
+);
+
+#[cfg(all(feature = "linux", not(feature = "std")))]
+compile_error!("The `linux` backend requires the `std` feature.");
+
+#[cfg(not(any(feature = "freertos", feature = "std")))]
+compile_error!("Enable either the `freertos` backend or the `std` host backend.");
 
 /// FreeRTOS implementation of OSAL traits.
 ///
@@ -233,13 +251,28 @@ compile_error!("Enable either the `freertos` backend or the `posix` host backend
 #[cfg(feature = "freertos")]
 mod freertos;
 
-/// POSIX implementation of OSAL traits (planned).
+/// Linux host reference implementation.
 ///
-/// This module will contain the implementation for POSIX-compliant systems.
-/// Currently under development.
+/// This module is a pure Rust reference implementation for all OSAL traits
+/// using safe Rust standard library primitives.  It is compiled when either
+/// the `linux` or `posix` feature is active. The POSIX backend has its
+/// own config/types modules and native pthread-based trait implementations,
+/// while Linux remains a pure Rust reference backend.
 ///
-/// Enabled with the `posix` feature flag.
-#[cfg(all(feature = "posix", not(feature = "freertos")))]
+/// Enabled with the `linux` or `posix` feature flag.
+#[cfg(any(feature = "linux", feature = "posix"))]
+mod linux;
+
+/// POSIX OSAL backend — native pthread implementation.
+///
+/// Following NASA's OSAL architecture, POSIX is the adaptation layer using
+/// `libc::pthread_*` primitives (`pthread_mutex`, `pthread_cond`,
+/// `pthread_create`, `CLOCK_MONOTONIC`).  The Linux backend remains
+/// independently usable as a pure Rust reference implementation via the
+/// `linux` feature.
+///
+/// Enabled with the `posix` feature flag (when `linux` is not also enabled).
+#[cfg(all(feature = "posix", not(feature = "linux")))]
 mod posix;
 
 pub mod log;
@@ -256,8 +289,12 @@ pub mod utils;
 #[cfg(feature = "freertos")]
 use crate::freertos as osal;
 
-/// Select POSIX as the active OSAL backend.
-#[cfg(all(feature = "posix", not(feature = "freertos")))]
+/// Select Linux as the active OSAL backend.
+#[cfg(feature = "linux")]
+use crate::linux as osal;
+
+/// Select POSIX as the active OSAL backend (native pthread primitives).
+#[cfg(all(feature = "posix", not(feature = "linux")))]
 use crate::posix as osal;
 
 /// Main OSAL module re-exporting all OS abstractions and traits.
@@ -284,14 +321,15 @@ use crate::posix as osal;
 ///     let thread = Thread::new("worker", 4096, 5, || {
 ///         println!("Worker thread running");
 ///     }).unwrap();
-///     
+///
 ///     thread.start().unwrap();
 ///     System::start();
 /// }
 /// ```
+#[cfg(not(feature = "linux"))]
 pub mod os {
 
-    #[cfg(feature = "freertos")]
+    #[cfg(all(not(feature = "disable_panic"), feature = "freertos"))]
     use crate::osal::allocator::Allocator;
 
     /// Global allocator using the underlying RTOS heap.
@@ -308,7 +346,8 @@ pub mod os {
     ///
     /// # Feature Flag
     ///
-    /// Active when using the `freertos` backend.
+    /// - Active by default
+    /// - Disabled with `disable_panic` feature if you want to provide your own allocator
     ///
     /// # FreeRTOS Configuration
     ///
@@ -325,50 +364,71 @@ pub mod os {
     /// let mut v = Vec::new();
     /// v.push(42);
     /// ```
-    #[cfg(feature = "freertos")]
+    #[cfg(all(not(feature = "disable_panic"), feature = "freertos"))]
     #[global_allocator]
     pub static ALLOCATOR: Allocator = Allocator;
 
     /// Event group synchronization primitives.
     #[allow(unused_imports)]
     pub use crate::osal::event_group::*;
-    
+
     /// Mutex types and guards for mutual exclusion.
     #[allow(unused_imports)]
     pub use crate::osal::mutex::*;
-    
+
     /// Queue types for inter-task communication.
     #[allow(unused_imports)]
     pub use crate::osal::queue::*;
-    
+
     /// Semaphore types for signaling and resource management.
     #[allow(unused_imports)]
     pub use crate::osal::semaphore::*;
-    
+
     /// System-level functions (scheduler, timing, critical sections).
     pub use crate::osal::system::*;
-    
+
     /// Thread/task management and notification types.
     pub use crate::osal::thread::*;
-    
+
     /// Software timer types for periodic and one-shot callbacks.
     #[allow(unused_imports)]
     pub use crate::osal::timer::*;
-    
+
     /// All OSAL trait definitions for advanced usage.
     pub use crate::traits::*;
-    
+
     /// RTOS configuration constants and types.
-    pub use crate::osal::config as config;
-    
+    pub use crate::osal::config;
+
     /// Type aliases and common types used throughout OSAL.
-    pub use crate::osal::types as types;
-    
+    pub use crate::osal::types;
+}
+
+/// OSAL module for the Linux backend.
+///
+/// This module is active when `linux` is the selected host backend
+/// (`--features linux`).  It provides direct access to the Linux reference
+/// implementation types.
+#[cfg(all(feature = "linux", not(feature = "freertos")))]
+pub mod os {
+    pub use crate::linux::config;
+    #[allow(unused_imports)]
+    pub use crate::linux::event_group::*;
+    pub use crate::linux::mutex::*;
+    #[allow(unused_imports)]
+    pub use crate::linux::queue::*;
+    pub use crate::linux::semaphore::*;
+    pub use crate::linux::system::{System, SystemState};
+    pub use crate::linux::thread::{Thread, ThreadMetadata, ThreadState};
+    #[allow(unused_imports)]
+    pub use crate::linux::timer::*;
+    pub use crate::linux::types;
+    pub use crate::traits::*;
 }
 
 /// Default panic handler for `no_std` environments.
 ///
-/// This panic handler is active for the `freertos` backend.
+/// This panic handler is active when the `disable_panic` feature is **not** enabled.
 /// It prints panic information and enters an infinite loop to halt execution.
 ///
 /// # Behavior
@@ -378,8 +438,9 @@ pub mod os {
 ///
 /// # Feature Flag
 ///
-/// - Enabled for `freertos`
-/// - Automatically disabled when using `posix`
+/// - Enabled by default in library mode
+/// - Disabled with `disable_panic` feature when users want to provide their own handler
+/// - Automatically disabled in examples that use `std`
 ///
 /// # Safety
 ///
@@ -389,11 +450,20 @@ pub mod os {
 /// - Performing safe shutdown procedures
 /// - Resetting the system via watchdog
 ///
-#[cfg(feature = "freertos")]
+/// # Custom Panic Handler
+///
+/// To provide your own panic handler, enable the `disable_panic` feature:
+///
+/// ```toml
+/// [dependencies]
+/// osal-rs = { version = "*", features = ["disable_panic"] }
+/// ```
+///
+/// Then define your own `#[panic_handler]` in your application.
+#[cfg(not(feature = "disable_panic"))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     println!("Panic occurred: {}", info);
     #[allow(clippy::empty_loop)]
     loop {}
 }
-

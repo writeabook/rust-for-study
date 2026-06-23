@@ -1,6 +1,6 @@
 [package]
 name = "osal-rs-serde"
-version = "0.5.1"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.85.0"
 authors = ["Antonio Salsi"]
@@ -58,4 +58,4 @@ required-features = ["derive"]
 
 [[test]]
 name = "integration_tests"
-required-features = ["std", "derive"]
+required-features = ["derive"]

@@ -63,7 +63,6 @@
 
 use crate::os::types::TickType;
 
-
 /// Converts a time value to RTOS ticks.
 ///
 /// This trait is implemented by time types (like `Duration`) to allow
@@ -93,24 +92,24 @@ use crate::os::types::TickType;
 /// ```ignore
 /// use osal_rs::traits::ToTick;
 /// use core::time::Duration;
-/// 
+///
 /// // Convert milliseconds to ticks
 /// let duration = Duration::from_millis(100);
 /// let ticks = duration.to_ticks();
-/// 
+///
 /// // Use with RTOS API
 /// System::delay(Duration::from_millis(500).to_ticks());
-/// 
+///
 /// // Or let the API handle the conversion
 /// fn delay_for(timeout: impl ToTick) {
 ///     let ticks = timeout.to_ticks();
 ///     // Use ticks...
 /// }
-/// 
+///
 /// delay_for(Duration::from_secs(1));
 /// delay_for(1000u32);  // If u32 implements ToTick
 /// ```
-pub trait ToTick : Sized + Copy {
+pub trait ToTick: Sized + Copy {
     /// Converts this value to RTOS ticks.
     ///
     /// Converts the time value to the equivalent number of system ticks
@@ -140,8 +139,7 @@ pub trait ToTick : Sized + Copy {
     /// assert_eq!(ticks, 250);
     /// ```
     fn to_ticks(&self) -> TickType;
-} 
-
+}
 
 /// Converts RTOS ticks to a time value.
 ///
@@ -166,11 +164,11 @@ pub trait ToTick : Sized + Copy {
 /// ```ignore
 /// use osal_rs::traits::FromTick;
 /// use core::time::Duration;
-/// 
+///
 /// // Create duration from tick count
 /// let mut duration = Duration::from_secs(0);
 /// duration.ticks(100);  // Set from 100 ticks
-/// 
+///
 /// // Calculate elapsed time
 /// let start_tick = System::get_tick_count();
 /// // ... do work ...
@@ -200,7 +198,7 @@ pub trait FromTick {
     /// use core::time::Duration;
     ///
     /// let mut duration = Duration::from_secs(0);
-    /// 
+    ///
     /// // With 1000 Hz tick rate (1ms per tick)
     /// duration.ticks(500);
     /// assert_eq!(duration.as_millis(), 500);

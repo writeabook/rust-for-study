@@ -32,7 +32,7 @@ use super::ffi::{SemaphoreHandle, pdFAIL, pdFALSE};
 use super::system::System;
 use super::types::{BaseType, UBaseType};
 use crate::traits::{SemaphoreFn, SystemFn, ToTick};
-use crate::utils::{Error, Result, OsalRsBool};
+use crate::utils::{Error, OsalRsBool, Result};
 
 /// A counting semaphore for resource management and signaling.
 ///
@@ -49,10 +49,10 @@ use crate::utils::{Error, Result, OsalRsBool};
 /// ```ignore
 /// use osal_rs::os::{Semaphore, SemaphoreFn};
 /// use core::time::Duration;
-/// 
+///
 /// // Create a binary semaphore (max_count = 1)
 /// let sem = Semaphore::new(1, 1).unwrap();
-/// 
+///
 /// // Wait (take) the semaphore
 /// if sem.wait(Duration::from_millis(100)).into() {
 ///     // Critical section
@@ -69,10 +69,10 @@ use crate::utils::{Error, Result, OsalRsBool};
 /// use osal_rs::os::{Semaphore, SemaphoreFn, Thread};
 /// use alloc::sync::Arc;
 /// use core::time::Duration;
-/// 
+///
 /// // Create semaphore for 5 resources
 /// let resources = Arc::new(Semaphore::new(5, 5).unwrap());
-/// 
+///
 /// let sem_clone = resources.clone();
 /// let worker = Thread::new("worker", 2048, 5, move || {
 ///     loop {
@@ -95,13 +95,13 @@ use crate::utils::{Error, Result, OsalRsBool};
 /// ```ignore
 /// use osal_rs::os::{Semaphore, SemaphoreFn};
 /// use alloc::sync::Arc;
-/// 
+///
 /// let event_sem = Arc::new(Semaphore::new(1, 0).unwrap());  // Initially unavailable
 /// let sem_clone = event_sem.clone();
-/// 
+///
 /// // In interrupt handler:
 /// // sem_clone.signal_from_isr();  // Signal event occurred
-/// 
+///
 /// // In thread:
 /// if event_sem.wait(1000).into() {
 ///     println!("Event received!");
@@ -113,15 +113,15 @@ use crate::utils::{Error, Result, OsalRsBool};
 /// ```ignore
 /// use osal_rs::os::{Semaphore, SemaphoreFn};
 /// use core::time::Duration;
-/// 
+///
 /// // Create semaphore with max_count=10, initially empty
 /// let counter = Semaphore::new(10, 0).unwrap();
-/// 
+///
 /// // Signal 3 times
 /// counter.signal();
 /// counter.signal();
 /// counter.signal();
-/// 
+///
 /// // Process 3 events
 /// for _ in 0..3 {
 ///     if counter.wait(Duration::from_millis(10)).into() {
@@ -129,13 +129,13 @@ use crate::utils::{Error, Result, OsalRsBool};
 ///     }
 /// }
 /// ```
-pub struct Semaphore (SemaphoreHandle);
+pub struct Semaphore(SemaphoreHandle);
 
 unsafe impl Send for Semaphore {}
 unsafe impl Sync for Semaphore {}
 
 impl Semaphore {
-        /// Creates a new counting semaphore.
+    /// Creates a new counting semaphore.
     ///
     /// # Parameters
     ///
@@ -151,10 +151,10 @@ impl Semaphore {
     ///
     /// ```ignore
     /// use osal_rs::os::{Semaphore, SemaphoreFn};
-    /// 
+    ///
     /// // Binary semaphore
     /// let binary_sem = Semaphore::new(1, 1).unwrap();
-    /// 
+    ///
     /// // Counting semaphore for 5 resources
     /// let counting_sem = Semaphore::new(5, 5).unwrap();
     /// ```
@@ -163,7 +163,7 @@ impl Semaphore {
         if handle.is_null() {
             Err(Error::OutOfMemory)
         } else {
-            Ok(Self (handle))
+            Ok(Self(handle))
         }
     }
 
@@ -184,7 +184,7 @@ impl Semaphore {
     ///
     /// ```ignore
     /// use osal_rs::os::{Semaphore, SemaphoreFn};
-    /// 
+    ///
     /// let sem = Semaphore::new_with_count(0).unwrap();
     /// ```
     pub fn new_with_count(initial_count: UBaseType) -> Result<Self> {
@@ -192,14 +192,12 @@ impl Semaphore {
         if handle.is_null() {
             Err(Error::OutOfMemory)
         } else {
-            Ok(Self (handle))
+            Ok(Self(handle))
         }
     }
-
 }
 
 impl SemaphoreFn for Semaphore {
-
     /// Waits to acquire the semaphore (decrements count).
     ///
     /// Blocks until semaphore is available or timeout expires.
@@ -218,7 +216,7 @@ impl SemaphoreFn for Semaphore {
     /// ```ignore
     /// use osal_rs::os::{Semaphore, SemaphoreFn};
     /// use core::time::Duration;
-    /// 
+    ///
     /// let sem = Semaphore::new(1, 1).unwrap();
     /// if sem.wait(Duration::from_millis(100)).into() {
     ///     // Critical section
@@ -251,16 +249,14 @@ impl SemaphoreFn for Semaphore {
     fn wait_from_isr(&self) -> OsalRsBool {
         let mut higher_priority_task_woken: BaseType = pdFALSE;
         if xSemaphoreTakeFromISR!(self.0, &mut higher_priority_task_woken) != pdFAIL {
-
             System::yield_from_isr(higher_priority_task_woken);
 
             OsalRsBool::True
         } else {
-
             OsalRsBool::False
         }
     }
-    
+
     /// Signals (releases) the semaphore (increments count).
     ///
     /// # Returns
@@ -272,7 +268,7 @@ impl SemaphoreFn for Semaphore {
     ///
     /// ```ignore
     /// use osal_rs::os::{Semaphore, SemaphoreFn};
-    /// 
+    ///
     /// let sem = Semaphore::new(1, 0).unwrap();
     /// sem.signal();  // Make semaphore available
     /// ```
@@ -283,7 +279,7 @@ impl SemaphoreFn for Semaphore {
             OsalRsBool::False
         }
     }
-    
+
     /// Signals the semaphore from ISR context.
     ///
     /// Automatically yields to higher priority tasks if needed.
@@ -302,7 +298,6 @@ impl SemaphoreFn for Semaphore {
     fn signal_from_isr(&self) -> OsalRsBool {
         let mut higher_priority_task_woken: BaseType = pdFALSE;
         if xSemaphoreGiveFromISR!(self.0, &mut higher_priority_task_woken) != pdFAIL {
-            
             System::yield_from_isr(higher_priority_task_woken);
 
             OsalRsBool::True
@@ -310,7 +305,7 @@ impl SemaphoreFn for Semaphore {
             OsalRsBool::False
         }
     }
-    
+
     /// Deletes the semaphore and frees its resources.
     ///
     /// After calling this, the semaphore handle is set to null and should not be used.
@@ -323,7 +318,7 @@ impl SemaphoreFn for Semaphore {
     ///
     /// ```ignore
     /// use osal_rs::os::{Semaphore, SemaphoreFn};
-    /// 
+    ///
     /// let mut sem = Semaphore::new(1, 1).unwrap();
     /// // Use the semaphore...
     /// sem.delete();
@@ -332,13 +327,10 @@ impl SemaphoreFn for Semaphore {
         vSemaphoreDelete!(self.0);
         self.0 = null_mut();
     }
-
-
 }
 
-
 /// Automatically deletes the semaphore when it goes out of scope.
-/// 
+///
 /// This ensures proper cleanup of FreeRTOS resources.
 impl Drop for Semaphore {
     fn drop(&mut self) {

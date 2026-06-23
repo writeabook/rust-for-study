@@ -61,7 +61,7 @@
 // - BaseType: Basic signed integer type
 // - UBaseType: Basic unsigned integer type
 // - StackType: Stack allocation type
-include!(concat!(env!("OUT_DIR"), "/types_generated.rs"));    
+include!(concat!(env!("OUT_DIR"), "/types_generated.rs"));
 
 use core::ffi::c_void;
 
@@ -137,4 +137,3 @@ pub type MutexHandle = *const c_void;
 /// }
 /// ```
 pub type EventBits = TickType;
-

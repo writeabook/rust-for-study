@@ -20,7 +20,7 @@
 
 //! Example showing automatic derive of Serialize and Deserialize traits.
 
-use osal_rs_serde::{Serialize, Deserialize, to_bytes, from_bytes};
+use osal_rs_serde::{Deserialize, Serialize, from_bytes, to_bytes};
 
 /// Sensor data structure with derive macros
 #[derive(Serialize, Deserialize, Debug)]

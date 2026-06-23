@@ -190,13 +190,18 @@ pub trait Serializer: Sized {
     fn serialize_bytes(&mut self, name: &str, v: &[u8]) -> core::result::Result<(), Self::Error>;
 
     /// Serialize a string.
-    fn serialize_string(&mut self, name: &str, v: &String) -> core::result::Result<(), Self::Error>;
+    fn serialize_string(&mut self, name: &str, v: &String)
+    -> core::result::Result<(), Self::Error>;
 
     /// Serialize a string slice.
     fn serialize_str(&mut self, name: &str, v: &str) -> core::result::Result<(), Self::Error>;
 
     /// Serialize a vector of serializable items.
-    fn serialize_vec<T>(&mut self, name: &str, v: &alloc::vec::Vec<T>) -> core::result::Result<(), Self::Error>
+    fn serialize_vec<T>(
+        &mut self,
+        name: &str,
+        v: &alloc::vec::Vec<T>,
+    ) -> core::result::Result<(), Self::Error>
     where
         T: Serialize;
 
@@ -207,7 +212,11 @@ pub trait Serializer: Sized {
 
     /// Begin serializing a struct with the given name and number of fields.
     /// Default implementation does nothing (suitable for binary formats).
-    fn serialize_struct_start(&mut self, _name: &str, _len: usize) -> core::result::Result<(), Self::Error> {
+    fn serialize_struct_start(
+        &mut self,
+        _name: &str,
+        _len: usize,
+    ) -> core::result::Result<(), Self::Error> {
         Ok(())
     }
 
@@ -377,7 +386,11 @@ impl<'a> Serializer for ByteSerializer<'a> {
         self.write_bytes(v)
     }
 
-    fn serialize_string(&mut self, name: &str, v: &String) -> core::result::Result<(), Self::Error> {
+    fn serialize_string(
+        &mut self,
+        name: &str,
+        v: &String,
+    ) -> core::result::Result<(), Self::Error> {
         self.serialize_str(name, v.as_str())
     }
 
@@ -385,9 +398,14 @@ impl<'a> Serializer for ByteSerializer<'a> {
         self.serialize_bytes(name, v.as_bytes())
     }
 
-    fn serialize_vec<T>(&mut self, name: &str, v: &alloc::vec::Vec<T>) -> core::result::Result<(), Self::Error> 
+    fn serialize_vec<T>(
+        &mut self,
+        name: &str,
+        v: &alloc::vec::Vec<T>,
+    ) -> core::result::Result<(), Self::Error>
     where
-        T: Serialize {
+        T: Serialize,
+    {
         // First write the length as u32
         self.serialize_u32(name, v.len() as u32)?;
         for item in v.iter() {
@@ -397,31 +415,30 @@ impl<'a> Serializer for ByteSerializer<'a> {
     }
 
     /// Serialize an array of serializable items.
-    fn serialize_array<T>(&mut self, name: &str, v: &[T]) -> core::result::Result<(), Self::Error> 
+    fn serialize_array<T>(&mut self, name: &str, v: &[T]) -> core::result::Result<(), Self::Error>
     where
-        T: Serialize {
+        T: Serialize,
+    {
         for item in v.iter() {
             item.serialize(name, self)?;
         }
         Ok(())
     }
-
 }
 
 // Implementations for primitive types
 
 impl Serialize for bool {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
-        S: Serializer
+        S: Serializer,
     {
-    
         serializer.serialize_bool(name, *self)
     }
 }
 
 impl Serialize for u8 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -430,7 +447,7 @@ impl Serialize for u8 {
 }
 
 impl Serialize for i8 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -439,7 +456,7 @@ impl Serialize for i8 {
 }
 
 impl Serialize for u16 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -448,7 +465,7 @@ impl Serialize for u16 {
 }
 
 impl Serialize for i16 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -457,7 +474,7 @@ impl Serialize for i16 {
 }
 
 impl Serialize for u32 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -466,7 +483,7 @@ impl Serialize for u32 {
 }
 
 impl Serialize for i32 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -475,7 +492,7 @@ impl Serialize for i32 {
 }
 
 impl Serialize for u64 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -484,7 +501,7 @@ impl Serialize for u64 {
 }
 
 impl Serialize for i64 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -493,7 +510,7 @@ impl Serialize for i64 {
 }
 
 impl Serialize for u128 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -502,7 +519,7 @@ impl Serialize for u128 {
 }
 
 impl Serialize for i128 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -511,7 +528,7 @@ impl Serialize for i128 {
 }
 
 impl Serialize for f32 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -520,7 +537,7 @@ impl Serialize for f32 {
 }
 
 impl Serialize for f64 {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -530,7 +547,7 @@ impl Serialize for f64 {
 
 // String implementations
 impl Serialize for &str {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -540,7 +557,7 @@ impl Serialize for &str {
 
 #[cfg(feature = "alloc")]
 impl Serialize for String {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -550,9 +567,9 @@ impl Serialize for String {
 
 // Array implementation
 impl<T: Serialize, const N: usize> Serialize for [T; N] {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
-        S: Serializer
+        S: Serializer,
     {
         serializer.serialize_array(name, self)
     }
@@ -560,7 +577,7 @@ impl<T: Serialize, const N: usize> Serialize for [T; N] {
 
 // Tuple implementations
 impl<T1: Serialize, T2: Serialize> Serialize for (T1, T2) {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {
@@ -571,9 +588,9 @@ impl<T1: Serialize, T2: Serialize> Serialize for (T1, T2) {
 }
 
 impl<T1: Serialize, T2: Serialize, T3: Serialize> Serialize for (T1, T2, T3) {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
-        S: Serializer
+        S: Serializer,
     {
         self.0.serialize(name, serializer)?;
         self.1.serialize(name, serializer)?;
@@ -584,7 +601,7 @@ impl<T1: Serialize, T2: Serialize, T3: Serialize> Serialize for (T1, T2, T3) {
 
 // Option implementation
 impl<T: Serialize> Serialize for Option<T> {
-    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error> 
+    fn serialize<S>(&self, name: &str, serializer: &mut S) -> core::result::Result<(), S::Error>
     where
         S: Serializer,
     {

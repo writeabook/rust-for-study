@@ -1,6 +1,6 @@
 [package]
 name = "osal-rs"
-version = "0.5.1"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.85.0"
 authors = ["Antonio Salsi"]
@@ -27,11 +27,15 @@ crate-type = ["staticlib", "rlib"]
 [features]
 default = ["freertos"]
 freertos = []
-posix = []
+posix = ["std", "libc"]
+linux = ["std"]
+std = ["disable_panic"]
+disable_panic = []
 serde = ["osal-rs-serde"]
 
 
 [dependencies]
+libc = { version = "0.2", optional = true, default-features = false }
 osal-rs-serde = { version = "0.5", path = "../osal-rs-serde", features = ["derive"], optional = true }
 
 [build-dependencies]

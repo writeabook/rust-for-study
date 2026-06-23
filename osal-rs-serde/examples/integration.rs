@@ -20,7 +20,7 @@
 
 //! Example showing advanced usage with custom types and nested structures.
 
-use osal_rs_serde::{Serialize, Deserialize, to_bytes, from_bytes};
+use osal_rs_serde::{Deserialize, Serialize, from_bytes, to_bytes};
 
 /// Device configuration
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -45,7 +45,6 @@ struct TelemetryPacket {
     readings: [SensorReading; 3],
     checksum: u32,
 }
-
 
 fn main() {
     println!("=== OSAL-RS-Serde Integration Example ===\n");
@@ -108,18 +107,18 @@ fn main() {
 
     // Example with Option
     println!("\n=== Optional Fields Example ===");
-    
+
     #[derive(Serialize, Deserialize, Debug)]
     struct ConfigWithOptional {
         device_id: u32,
         network_address: Option<u32>,
-        device_name: Option<u8>,  // Using u8 as simplified string
+        device_name: Option<u8>, // Using u8 as simplified string
     }
 
     let config1 = ConfigWithOptional {
         device_id: 1,
         network_address: Some(0xC0A80101), // 192.168.1.1
-        device_name: Some(65), // 'A'
+        device_name: Some(65),             // 'A'
     };
 
     let config2 = ConfigWithOptional {
@@ -134,7 +133,10 @@ fn main() {
 
     let len2 = to_bytes(&config2, &mut buffer).unwrap();
     println!("Config without optional: {} bytes", len2);
-    println!("Saved {} bytes by not including optional fields!", len1 - len2);
+    println!(
+        "Saved {} bytes by not including optional fields!",
+        len1 - len2
+    );
 
     println!("\n=== Example completed successfully! ===");
 }

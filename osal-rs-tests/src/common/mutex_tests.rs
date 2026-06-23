@@ -20,8 +20,10 @@
 
 extern crate alloc;
 
+use alloc::sync::Arc;
+
 use osal_rs::os::*;
-use osal_rs::utils::Result;
+use osal_rs::utils::{OsalRsBool, Result};
 use osal_rs::{log_debug, log_info};
 
 const TAG: &str = "MutexTests";
@@ -36,17 +38,17 @@ pub fn test_mutex_creation() -> Result<()> {
 pub fn test_mutex_lock_unlock() -> Result<()> {
     log_info!(TAG, "Starting test_mutex_lock_unlock");
     let mutex = Mutex::new(42u32);
-    
+
     {
         let guard = mutex.lock();
         assert!(guard.is_ok());
-        
+
         if let Ok(g) = guard {
             log_debug!(TAG, "Mutex locked, value: {}", *g);
             assert_eq!(*g, 42);
         }
     }
-    
+
     {
         let guard = mutex.lock();
         assert!(guard.is_ok());
@@ -59,13 +61,13 @@ pub fn test_mutex_lock_unlock() -> Result<()> {
 pub fn test_mutex_modify_data() -> Result<()> {
     log_info!(TAG, "Starting test_mutex_modify_data");
     let mutex = Mutex::new(0u32);
-    
+
     {
         let mut guard = mutex.lock()?;
         *guard = 100;
         log_debug!(TAG, "Modified value to: {}", *guard);
     }
-    
+
     {
         let guard = mutex.lock()?;
         log_debug!(TAG, "Read value: {}", *guard);
@@ -78,13 +80,13 @@ pub fn test_mutex_modify_data() -> Result<()> {
 pub fn test_mutex_multiple_locks() -> Result<()> {
     log_info!(TAG, "Starting test_mutex_multiple_locks");
     let mutex = Mutex::new(0u32);
-    
+
     for i in 0..10 {
         let mut guard = mutex.lock()?;
         *guard += 1;
         assert_eq!(*guard, i + 1);
     }
-    
+
     let guard = mutex.lock()?;
     log_debug!(TAG, "Final counter value: {}", *guard);
     assert_eq!(*guard, 10);
@@ -95,12 +97,12 @@ pub fn test_mutex_multiple_locks() -> Result<()> {
 pub fn test_mutex_guard_drop() -> Result<()> {
     log_info!(TAG, "Starting test_mutex_guard_drop");
     let mutex = Mutex::new(42u32);
-    
+
     {
         let _guard = mutex.lock()?;
         log_debug!(TAG, "Guard acquired, will drop on scope exit");
     }
-    
+
     let guard = mutex.lock();
     assert!(guard.is_ok());
     log_info!(TAG, "test_mutex_guard_drop PASSED");
@@ -114,16 +116,24 @@ pub fn test_mutex_with_struct() -> Result<()> {
         value: u32,
         flag: bool,
     }
-    
-    let mutex = Mutex::new(TestData { value: 0, flag: false });
-    
+
+    let mutex = Mutex::new(TestData {
+        value: 0,
+        flag: false,
+    });
+
     {
         let mut guard = mutex.lock()?;
         guard.value = 123;
         guard.flag = true;
-        log_debug!(TAG, "Modified struct - value: {}, flag: {}", guard.value, guard.flag);
+        log_debug!(
+            TAG,
+            "Modified struct - value: {}, flag: {}",
+            guard.value,
+            guard.flag
+        );
     }
-    
+
     {
         let guard = mutex.lock()?;
         assert_eq!(guard.value, 123);
@@ -133,17 +143,76 @@ pub fn test_mutex_with_struct() -> Result<()> {
     Ok(())
 }
 
-pub fn test_mutex_recursive() -> Result<()> {
-    log_info!(TAG, "Starting test_mutex_recursive");
+pub fn test_mutex_non_recursive() -> Result<()> {
+    log_info!(TAG, "Starting test_mutex_non_recursive");
     let mutex = Mutex::new(0u32);
-    
-    let _guard1 = mutex.lock()?;
-    log_debug!(TAG, "Lock 1 acquired");
-    let _guard2 = mutex.lock()?;
-    log_debug!(TAG, "Lock 2 acquired");
-    let _guard3 = mutex.lock()?;
-    log_debug!(TAG, "Lock 3 acquired");
-    log_info!(TAG, "test_mutex_recursive PASSED");
+
+    let _guard = mutex.lock()?;
+    log_debug!(TAG, "First lock acquired");
+
+    let second = mutex.lock();
+    assert!(
+        second.is_err(),
+        "typed Mutex<T> must not return a second mutable guard"
+    );
+
+    log_info!(TAG, "test_mutex_non_recursive PASSED");
+    Ok(())
+}
+
+pub fn test_raw_mutex_recursive() -> Result<()> {
+    log_info!(TAG, "Starting test_raw_mutex_recursive");
+
+    let raw = Arc::new(RawMutex::new()?);
+
+    // Recursive acquisition: 3 locks
+    assert_eq!(raw.lock(), OsalRsBool::True);
+    assert_eq!(raw.lock(), OsalRsBool::True);
+    assert_eq!(raw.lock(), OsalRsBool::True);
+
+    // Partial unlock: 2 unlocks — mutex still held (recursion > 0)
+    assert_eq!(raw.unlock(), OsalRsBool::True);
+    assert_eq!(raw.unlock(), OsalRsBool::True);
+
+    // Cross-thread checks — only on std-enabled backends (linux, posix)
+    #[cfg(any(feature = "linux", feature = "posix"))]
+    {
+        use std::thread;
+
+        // Another thread must NOT be able to acquire it while held
+        {
+            let raw_clone = Arc::clone(&raw);
+            let handle = thread::spawn(move || raw_clone.lock_from_isr());
+            assert_eq!(handle.join().unwrap(), OsalRsBool::False);
+        }
+    }
+
+    // Final unlock — recursion reaches zero, mutex fully released
+    assert_eq!(raw.unlock(), OsalRsBool::True);
+
+    // Extra unlock on a free mutex should fail
+    assert_eq!(raw.unlock(), OsalRsBool::False);
+
+    // Cross-thread check — only on std-enabled backends
+    #[cfg(any(feature = "linux", feature = "posix"))]
+    {
+        use std::thread;
+
+        // Another thread should now succeed
+        {
+            let raw_clone2 = Arc::clone(&raw);
+            let handle2 = thread::spawn(move || {
+                let result = raw_clone2.lock_from_isr();
+                if result == OsalRsBool::True {
+                    raw_clone2.unlock_from_isr();
+                }
+                result
+            });
+            assert_eq!(handle2.join().unwrap(), OsalRsBool::True);
+        }
+    }
+
+    log_info!(TAG, "test_raw_mutex_recursive PASSED");
     Ok(())
 }
 
@@ -163,7 +232,8 @@ pub fn run_all_tests() -> Result<()> {
     test_mutex_multiple_locks()?;
     test_mutex_guard_drop()?;
     test_mutex_with_struct()?;
-    test_mutex_recursive()?;
+    test_mutex_non_recursive()?;
+    test_raw_mutex_recursive()?;
     test_mutex_drop()?;
     log_info!(TAG, "========== All Mutex Tests PASSED ==========");
     Ok(())

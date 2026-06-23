@@ -159,7 +159,9 @@ pub use crate::traits::byte::*;
 pub use crate::traits::event_group::EventGroup as EventGroupFn;
 
 // Re-export mutex traits with Fn suffix (RawMutex, Mutex, MutexGuard)
-pub use crate::traits::mutex::{Mutex as MutexFn, MutexGuard as MutexGuardFn, RawMutex as RawMutexFn};
+pub use crate::traits::mutex::{
+    Mutex as MutexFn, MutexGuard as MutexGuardFn, RawMutex as RawMutexFn,
+};
 
 // Re-export queue traits with Fn suffix (Queue for raw bytes, QueueStreamed for typed messages)
 pub use crate::traits::queue::{Queue as QueueFn, QueueStreamed as QueueStreamedFn};
@@ -171,10 +173,12 @@ pub use crate::traits::semaphore::Semaphore as SemaphoreFn;
 pub use crate::traits::system::System as SystemFn;
 
 // Re-export thread trait and related types (ThreadParam, function pointers, notifications, priority conversion)
-pub use crate::traits::thread::{Thread as ThreadFn, ThreadParam, ThreadFnPtr, ThreadSimpleFnPtr, ThreadNotification, ToPriority};
+pub use crate::traits::thread::{
+    Thread as ThreadFn, ThreadFnPtr, ThreadNotification, ThreadParam, ThreadSimpleFnPtr, ToPriority,
+};
 
 // Re-export tick conversion traits (ToTick, FromTick)
 pub use crate::traits::tick::*;
 
 // Re-export timer trait and related types (TimerParam, function pointer)
-pub use crate::traits::timer::{Timer as TimerFn, TimerParam, TimerFnPtr};
+pub use crate::traits::timer::{Timer as TimerFn, TimerFnPtr, TimerParam};

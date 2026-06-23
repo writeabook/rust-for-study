@@ -36,13 +36,13 @@
 //!
 //! ```ignore
 //! use osal_rs::{tick_rate_hz, cpu_clock_hz, max_priorities};
-//! 
+//!
 //! let tick_rate = tick_rate_hz!();
 //! println!("Tick rate: {} Hz", tick_rate);
-//! 
+//!
 //! let cpu_freq = cpu_clock_hz!();
 //! println!("CPU frequency: {} Hz", cpu_freq);
-//! 
+//!
 //! let priorities = max_priorities!();
 //! println!("Max priorities: {}", priorities);
 //! ```
@@ -52,29 +52,29 @@
 /// These C functions are implemented in the porting layer and return
 /// configuration values from FreeRTOSConfig.h.
 pub mod ffi {
-    use crate::freertos::types::{TickType, StackType};
+    use crate::freertos::types::{StackType, TickType};
 
     unsafe extern "C" {
         /// Returns the CPU clock frequency in Hz.
         ///
         /// Typically corresponds to `configCPU_CLOCK_HZ` in FreeRTOSConfig.h.
         pub fn osal_rs_config_cpu_clock_hz() -> u64;
-        
+
         /// Returns the RTOS tick rate in Hz (ticks per second).
         ///
         /// Corresponds to `configTICK_RATE_HZ` in FreeRTOSConfig.h.
         pub fn osal_rs_config_tick_rate_hz() -> TickType;
-        
+
         /// Returns the maximum number of priority levels.
         ///
         /// Corresponds to `configMAX_PRIORITIES` in FreeRTOSConfig.h.
         pub fn osal_rs_config_max_priorities() -> u32;
-        
+
         /// Returns the minimum stack size for tasks.
         ///
         /// Corresponds to `configMINIMAL_STACK_SIZE` in FreeRTOSConfig.h.
         pub fn osal_rs_config_minimal_stack_size() -> StackType;
-        
+
         /// Returns the maximum length for task names.
         ///
         /// Corresponds to `configMAX_TASK_NAME_LEN` in FreeRTOSConfig.h.
@@ -95,7 +95,7 @@ pub mod ffi {
 ///
 /// ```ignore
 /// use osal_rs::tick_period_ms;
-/// 
+///
 /// let period = tick_period_ms!();
 /// println!("Each tick is {} Hz", period);
 /// ```
@@ -124,7 +124,7 @@ macro_rules! tick_period_ms {
 ///
 /// ```ignore
 /// use osal_rs::tick_rate_hz;
-/// 
+///
 /// let rate = tick_rate_hz!();
 /// println!("Tick rate: {} Hz", rate);
 /// println!("Tick period: {} ms", 1000 / rate);
@@ -148,7 +148,7 @@ macro_rules! tick_rate_hz {
 ///
 /// ```ignore
 /// use osal_rs::cpu_clock_hz;
-/// 
+///
 /// let freq = cpu_clock_hz!();
 /// println!("CPU running at {} MHz", freq / 1_000_000);
 /// ```
@@ -171,7 +171,7 @@ macro_rules! cpu_clock_hz {
 ///
 /// ```ignore
 /// use osal_rs::max_priorities;
-/// 
+///
 /// let max = max_priorities!();
 /// println!("Priority range: 0 to {}", max - 1);
 /// ```
@@ -195,16 +195,16 @@ macro_rules! max_priorities {
 ///
 /// ```ignore
 /// use osal_rs::minimal_stack_size;
-/// 
+///
 /// let min_stack = minimal_stack_size!();
 /// println!("Minimum stack: {} words", min_stack);
 /// ```
 #[macro_export]
 macro_rules! minimal_stack_size {
     () => {
-        ( unsafe { $crate::os::config::ffi::osal_rs_config_minimal_stack_size() })
+        (unsafe { $crate::os::config::ffi::osal_rs_config_minimal_stack_size() })
     };
-}   
+}
 
 /// Returns the maximum length for task names.
 ///
@@ -218,7 +218,7 @@ macro_rules! minimal_stack_size {
 ///
 /// ```ignore
 /// use osal_rs::max_task_name_len;
-/// 
+///
 /// let max_len = max_task_name_len!();
 /// println!("Max task name length: {} characters", max_len);
 /// ```

@@ -46,10 +46,10 @@
 //! ```ignore
 //! // Don't use FFI directly - use safe wrappers instead:
 //! use osal_rs::os::{Thread, ThreadFn};
-//! 
+//!
 //! // This is safe:
 //! let thread = Thread::new("task", 1024, 5);
-//! 
+//!
 //! // This is unsafe and should be avoided:
 //! // unsafe { xTaskCreate(...) }
 //! ```
@@ -60,7 +60,7 @@
 use core::ffi::{c_char, c_uint, c_void};
 use core::ptr;
 
-use super::types::{BaseType, StackType, UBaseType, TickType, EventBits};
+use super::types::{BaseType, EventBits, StackType, TickType, UBaseType};
 
 /// Opaque handle to a FreeRTOS task/thread
 pub(super) type ThreadHandle = *const c_void;
@@ -129,10 +129,6 @@ pub(super) mod queue {
     pub(in crate::freertos) const QUEUE_TYPE_RECURSIVE_MUTEX: u8 = 4;
 }
 
-
-
-
-
 /// Task status information structure.
 ///
 /// Contains detailed information about a task's state, priority, stack usage, etc.
@@ -156,7 +152,7 @@ pub(super) struct TaskStatus {
     /// Stack base address
     pub(super) pxStackBase: *mut StackType,
     /// Stack high water mark (minimum free stack)
-    pub(super) usStackHighWaterMark: StackType
+    pub(super) usStackHighWaterMark: StackType,
 }
 
 impl Default for TaskStatus {
@@ -178,19 +174,18 @@ impl Default for TaskStatus {
 pub(super) type TaskFunction = Option<unsafe extern "C" fn(arg: *mut c_void)>;
 
 unsafe extern "C" {
-    
 
     /// Allocate memory from the  heap
-    /// 
+    ///
     /// # Arguments
     /// * `size` - The number of bytes to allocate
-    /// 
+    ///
     /// # Returns
     /// A pointer to the allocated memory, or null if allocation fails
     pub(super) fn pvPortMalloc(size: usize) -> *mut c_void;
 
     /// Free memory previously allocated by pvPortMalloc
-    /// 
+    ///
     /// # Arguments
     /// * `pv` - Pointer to the memory to free
     pub(super) fn vPortFree(pv: *mut c_void);
@@ -201,7 +196,6 @@ unsafe extern "C" {
         pxPreviousWakeTime: *mut TickType,
         xTimeIncrement: TickType,
     ) -> BaseType;
-
 
     pub(super) fn xTaskGetTickCount() -> TickType;
 
@@ -231,7 +225,6 @@ unsafe extern "C" {
     pub(super) fn osal_rs_task_enter_critical_from_isr() -> UBaseType;
     pub(super) fn osal_rs_task_exit_critical_from_isr(uxSavedInterruptStatus: UBaseType);
 
-
     pub(super) fn xTaskCreate(
         pxTaskCode: TaskFunction,
         pcName: *const c_char,
@@ -256,7 +249,6 @@ unsafe extern "C" {
 
     // pub fn ulTaskGenericNotifyTake(uxIndexToWaitOn: UBaseType, xClearCountOnExit: BaseType, xTicksToWait: TickType) -> u32;
 
-
     pub(super) fn xTaskGenericNotifyWait(
         uxIndexToWaitOn: UBaseType,
         ulBitsToClearOnEntry: u32,
@@ -264,7 +256,6 @@ unsafe extern "C" {
         pulNotificationValue: *mut u32,
         xTicksToWait: TickType,
     ) -> BaseType;
-
 
     pub(super) fn xTaskGenericNotify(
         xTaskToNotify: ThreadHandle,
@@ -274,7 +265,6 @@ unsafe extern "C" {
         pulPreviousNotificationValue: *mut u32,
     ) -> BaseType;
 
-
     pub(super) fn xTaskGenericNotifyFromISR(
         xTaskToNotify: ThreadHandle,
         uxIndexToNotify: UBaseType,
@@ -283,7 +273,7 @@ unsafe extern "C" {
         pulPreviousNotificationValue: *mut u32,
         pxHigherPriorityTaskWoken: *mut BaseType,
     ) -> BaseType;
-    
+
     pub(super) fn xEventGroupWaitBits(
         xEventGroup: EventGroupHandle,
         uxBitsToWaitFor: EventBits,
@@ -307,7 +297,6 @@ unsafe extern "C" {
         uxBitsToSet: EventBits,
     ) -> EventBits;
 
-
     pub(super) fn xEventGroupSetBitsFromISR(
         xEventGroup: EventGroupHandle,
         uxBitsToSet: EventBits,
@@ -326,10 +315,10 @@ unsafe extern "C" {
 
     pub(super) fn osal_rs_port_yield_from_isr(pxHigherPriorityTaskWoken: BaseType);
 
-    pub(super) fn osal_rs_port_end_switching_isr( xSwitchRequired: BaseType );
+    pub(super) fn osal_rs_port_end_switching_isr(xSwitchRequired: BaseType);
 
     pub(super) fn xQueueCreateMutex(ucQueueType: u8) -> QueueHandle;
-    
+
     pub(super) fn xQueueCreateCountingSemaphore(
         uxMaxCount: UBaseType,
         uxInitialCount: UBaseType,
@@ -376,7 +365,8 @@ unsafe extern "C" {
         xCopyPosition: BaseType,
     ) -> BaseType;
 
-    pub(super) fn xQueueTakeMutexRecursive(xMutex: QueueHandle, xTicksToWait: TickType) -> BaseType;
+    pub(super) fn xQueueTakeMutexRecursive(xMutex: QueueHandle, xTicksToWait: TickType)
+    -> BaseType;
 
     pub(super) fn xQueueGiveMutexRecursive(xMutex: QueueHandle) -> BaseType;
 
@@ -408,9 +398,8 @@ unsafe extern "C" {
 
     pub(super) fn pvTimerGetTimerID(xTimer: TimerHandle) -> *mut c_void;
 
-    // pub fn printf(fmt: *const u8, ...) -> i32; 
+    // pub fn printf(fmt: *const u8, ...) -> i32;
 }
-
 
 macro_rules! xTaskNotifyWait {
     ($ulBitsToClearOnEntry:expr, $ulBitsToClearOnExit:expr, $pulNotificationValue:expr, $xTicksToWait:expr) => {
@@ -420,7 +409,7 @@ macro_rules! xTaskNotifyWait {
                 $ulBitsToClearOnEntry,
                 $ulBitsToClearOnExit,
                 $pulNotificationValue,
-                $xTicksToWait
+                $xTicksToWait,
             )
         }
     };
@@ -434,7 +423,7 @@ macro_rules! xTaskNotify {
                 $crate::freertos::ffi::tskDEFAULT_INDEX_TO_NOTIFY,
                 $ulValue,
                 $eAction,
-                core::ptr::null_mut()
+                core::ptr::null_mut(),
             )
         }
     };
@@ -449,40 +438,29 @@ macro_rules! xTaskNotifyFromISR {
                 $ulValue,
                 $eAction,
                 core::ptr::null_mut(),
-                $pxHigherPriorityTaskWoken
+                $pxHigherPriorityTaskWoken,
             )
         }
     };
 }
 
-
 macro_rules! xEventGroupGetBits {
     ($xEventGroup:expr) => {
-        unsafe {
-            $crate::freertos::ffi::xEventGroupClearBits($xEventGroup, 0)
-        }
+        unsafe { $crate::freertos::ffi::xEventGroupClearBits($xEventGroup, 0) }
     };
 }
 
 macro_rules! xSemaphoreCreateCounting {
     ($uxMaxCount:expr, $uxInitialCount:expr) => {
         unsafe {
-            $crate::freertos::ffi::xQueueCreateCountingSemaphore(
-                $uxMaxCount,
-                $uxInitialCount
-            )
+            $crate::freertos::ffi::xQueueCreateCountingSemaphore($uxMaxCount, $uxInitialCount)
         }
     };
 }
 
 macro_rules! xSemaphoreTake {
     ($xSemaphore:expr, $xBlockTime:expr) => {
-        unsafe {
-            $crate::freertos::ffi::xQueueSemaphoreTake(
-                $xSemaphore,
-                $xBlockTime
-            )
-        }
+        unsafe { $crate::freertos::ffi::xQueueSemaphoreTake($xSemaphore, $xBlockTime) }
     };
 }
 
@@ -492,7 +470,7 @@ macro_rules! xSemaphoreTakeFromISR {
             $crate::freertos::ffi::xQueueReceiveFromISR(
                 $xSemaphore,
                 core::ptr::null_mut(),
-                $pxHigherPriorityTaskWoken
+                $pxHigherPriorityTaskWoken,
             )
         }
     };
@@ -505,7 +483,7 @@ macro_rules! xSemaphoreGive {
                 $xSemaphore,
                 core::ptr::null(),
                 $crate::freertos::ffi::sem::GIVE_BLOCK_TIME,
-                $crate::freertos::ffi::queue::SEND_TO_BACK
+                $crate::freertos::ffi::queue::SEND_TO_BACK,
             )
         }
     };
@@ -513,20 +491,13 @@ macro_rules! xSemaphoreGive {
 
 macro_rules! xSemaphoreGiveFromISR {
     ($xSemaphore:expr, $pxHigherPriorityTaskWoken:expr) => {
-        unsafe {
-            $crate::freertos::ffi::xQueueGiveFromISR(
-                $xSemaphore,
-                $pxHigherPriorityTaskWoken
-            )
-        }
+        unsafe { $crate::freertos::ffi::xQueueGiveFromISR($xSemaphore, $pxHigherPriorityTaskWoken) }
     };
 }
 
 macro_rules! vSemaphoreDelete {
     ($xSemaphore:expr) => {
-        unsafe {
-            $crate::freertos::ffi::vQueueDelete($xSemaphore)
-        }
+        unsafe { $crate::freertos::ffi::vQueueDelete($xSemaphore) }
     };
 }
 
@@ -537,7 +508,7 @@ macro_rules! xQueueSendToBackFromISR {
                 $xQueue,
                 $pvItemToQueue,
                 $pxHigherPriorityTaskWoken,
-                $crate::freertos::ffi::queue::SEND_TO_BACK
+                $crate::freertos::ffi::queue::SEND_TO_BACK,
             )
         }
     };
@@ -550,7 +521,7 @@ macro_rules! xQueueSendToBack {
                 $xQueue,
                 $pvItemToQueue,
                 $xTicksToWait,
-                $crate::freertos::ffi::queue::SEND_TO_BACK
+                $crate::freertos::ffi::queue::SEND_TO_BACK,
             )
         }
     };
@@ -560,7 +531,7 @@ macro_rules! xSemaphoreCreateRecursiveMutex {
     () => {
         unsafe {
             $crate::freertos::ffi::xQueueCreateMutex(
-                $crate::freertos::ffi::queue::QUEUE_TYPE_RECURSIVE_MUTEX
+                $crate::freertos::ffi::queue::QUEUE_TYPE_RECURSIVE_MUTEX,
             )
         }
     };
@@ -568,19 +539,12 @@ macro_rules! xSemaphoreCreateRecursiveMutex {
 
 macro_rules! xSemaphoreTakeRecursive {
     ($xMutex:expr, $xBlockTime:expr) => {
-        unsafe {
-            $crate::freertos::ffi::xQueueTakeMutexRecursive(
-                $xMutex,
-                $xBlockTime
-            )
-        }
+        unsafe { $crate::freertos::ffi::xQueueTakeMutexRecursive($xMutex, $xBlockTime) }
     };
 }
 
 macro_rules! xSemaphoreGiveRecursive {
     ($xMutex:expr) => {
-        unsafe {
-            $crate::freertos::ffi::xQueueGiveMutexRecursive($xMutex)
-        }
+        unsafe { $crate::freertos::ffi::xQueueGiveMutexRecursive($xMutex) }
     };
 }

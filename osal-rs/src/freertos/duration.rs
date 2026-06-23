@@ -25,9 +25,9 @@
 
 use core::time::Duration;
 
-use crate::traits::{ToTick, FromTick};
-use crate::tick_rate_hz;
 use super::types::TickType;
+use crate::tick_rate_hz;
+use crate::traits::{FromTick, ToTick};
 
 /// Converts a `Duration` to FreeRTOS ticks.
 ///
@@ -36,7 +36,7 @@ use super::types::TickType;
 /// ```ignore
 /// use core::time::Duration;
 /// use osal_rs::os::ToTick;
-/// 
+///
 /// let duration = Duration::from_millis(100);
 /// let ticks = duration.to_ticks();  // Converts to FreeRTOS ticks
 /// ```
@@ -48,7 +48,7 @@ use super::types::TickType;
 impl ToTick for Duration {
     fn to_ticks(&self) -> TickType {
         let millis = self.as_millis() as TickType;
-        
+
         // Check for potential overflow and saturate at max value
         millis.saturating_mul(tick_rate_hz!() as TickType) / 1000
     }
@@ -61,7 +61,7 @@ impl ToTick for Duration {
 /// ```ignore
 /// use core::time::Duration;
 /// use osal_rs::os::FromTick;
-/// 
+///
 /// let mut duration = Duration::from_secs(0);
 /// duration.ticks(100);  // Set duration from 100 ticks
 /// ```

@@ -1,42 +1,71 @@
-/***************************************************************************
- *
- * osal-rs
- * Copyright (C) 2026 Antonio Salsi <passy.linux@zresa.it>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <https://www.gnu.org/licenses/>.
- *
- ***************************************************************************/
+//! POSIX backend thread management.
+//!
+//! Thread lifecycle is built on `pthread_create` / `pthread_join` through the
+//! POSIX sys thread layer.  Thread state and notifications use `PosixMutex` +
+//! `PosixCondvar` (with `CLOCK_MONOTONIC` deadlines).  Current-thread lookup
+//! uses `pthread_key_t` TLS.
+//!
+//! # Cooperative cancellation
+//!
+//! `delete()` does **not** call `pthread_cancel`.  It sets a flag and wakes
+//! blocked waiters.  Long-running callbacks must poll `is_delete_requested()`
+//! / `is_cancellation_requested()` and return naturally.  Call `join()` after
+//! the callback exits to reclaim the pthread.
+//!
+//! # Limitations (host-simulation)
+//!
+//! - `suspend` / `resume` are no-ops (POSIX has no portable thread suspend).
+//! - Priority is stored as metadata but not mapped to `pthread_setschedparam`.
+//! - `_from_isr` methods use non-blocking `try_lock` — host simulation only.
 
+use core::any::Any;
+use core::cell::UnsafeCell;
+use core::ffi::c_void;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
-use core::ptr::null;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::time::Duration;
 
-use alloc::sync::Arc;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
 
-use crate::posix::types::{BaseType, StackType, ThreadHandle, TickType, UBaseType};
-use crate::traits::{ThreadFn, ThreadFnPtr, ThreadNotification, ThreadParam, ToPriority, ToTick};
+use libc::PTHREAD_MUTEX_ERRORCHECK;
+
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::OnceLock;
+
+use super::config::TICK_PERIOD_MS;
+use super::sys::clock;
+use super::sys::condvar::PosixCondvar;
+use super::sys::mutex::PosixMutex;
+use super::sys::thread as sys_thread;
+use super::types::{BaseType, StackType, ThreadHandle, TickType, UBaseType};
+
+use crate::traits::{ThreadFn, ThreadNotification, ThreadParam, ToPriority, ToTick};
 use crate::utils::{Bytes, DoublePtr, Error, Result};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const MAX_TASK_NAME_LEN: usize = 16;
 
-fn dummy_thread_handle() -> ThreadHandle {
-    1usize as ThreadHandle
+static NEXT_THREAD_ID: AtomicUsize = AtomicUsize::new(1);
+
+fn next_thread_id() -> usize {
+    NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[repr(u8)]
+// ---------------------------------------------------------------------------
+// ThreadState
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThreadState {
+    #[default]
     Running = 0,
     Ready = 1,
     Blocked = 2,
@@ -44,6 +73,10 @@ pub enum ThreadState {
     Deleted = 4,
     Invalid,
 }
+
+// ---------------------------------------------------------------------------
+// ThreadMetadata
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct ThreadMetadata {
@@ -64,8 +97,8 @@ unsafe impl Sync for ThreadMetadata {}
 
 impl Default for ThreadMetadata {
     fn default() -> Self {
-        Self {
-            thread: null(),
+        ThreadMetadata {
+            thread: core::ptr::null_mut(),
             name: Bytes::new(),
             stack_depth: 0,
             priority: 0,
@@ -79,226 +112,887 @@ impl Default for ThreadMetadata {
     }
 }
 
-#[derive(Clone)]
-pub struct Thread {
-    handle: ThreadHandle,
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
+
+struct ThreadRegistry {
+    by_handle: BTreeMap<usize, Weak<ThreadCore>>,
+}
+
+struct RegistryCell {
+    mutex: PosixMutex,
+    inner: UnsafeCell<ThreadRegistry>,
+}
+
+unsafe impl Send for RegistryCell {}
+unsafe impl Sync for RegistryCell {}
+
+static REGISTRY: OnceLock<RegistryCell> = OnceLock::new();
+
+fn registry() -> &'static RegistryCell {
+    REGISTRY.get_or_init(|| RegistryCell {
+        mutex: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).expect("POSIX thread registry mutex"),
+        inner: UnsafeCell::new(ThreadRegistry {
+            by_handle: BTreeMap::new(),
+        }),
+    })
+}
+
+// RAII registry lock guard.
+struct RegistryGuard<'a> {
+    cell: &'a RegistryCell,
+}
+
+impl<'a> RegistryGuard<'a> {
+    fn lock(cell: &'a RegistryCell) -> Self {
+        assert!(cell.mutex.lock(), "failed to lock POSIX thread registry");
+        Self { cell }
+    }
+}
+
+impl Deref for RegistryGuard<'_> {
+    type Target = ThreadRegistry;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.cell.inner.get() }
+    }
+}
+
+impl Drop for RegistryGuard<'_> {
+    fn drop(&mut self) {
+        assert!(
+            self.cell.mutex.unlock(),
+            "failed to unlock POSIX thread registry"
+        );
+    }
+}
+
+fn registry_lock() -> impl Deref<Target = ThreadRegistry> {
+    RegistryGuard::lock(registry())
+}
+
+unsafe fn registry_inner_mut() -> &'static mut ThreadRegistry {
+    // Caller must hold the registry mutex.
+    &mut *registry().inner.get()
+}
+
+fn register_thread(id: usize, core: &Arc<ThreadCore>) {
+    let _guard = registry_lock();
+    unsafe {
+        registry_inner_mut()
+            .by_handle
+            .insert(id, Arc::downgrade(core));
+    }
+}
+
+fn unregister_thread(id: usize) {
+    let _guard = registry_lock();
+    unsafe {
+        registry_inner_mut().by_handle.remove(&id);
+    }
+}
+
+fn lookup_by_handle(handle: ThreadHandle) -> Option<Arc<ThreadCore>> {
+    let _guard = registry_lock();
+    unsafe {
+        registry_inner_mut()
+            .by_handle
+            .get(&(handle as usize))
+            .and_then(|w| w.upgrade())
+    }
+}
+
+pub(crate) fn count_registered_threads() -> usize {
+    ensure_main_thread_registered();
+    let _guard = registry_lock();
+    unsafe {
+        let inner = registry_inner_mut();
+        inner.by_handle.retain(|_, w| w.strong_count() > 0);
+        inner.by_handle.len()
+    }
+}
+
+pub(crate) fn snapshot_registered_threads() -> Vec<ThreadMetadata> {
+    ensure_main_thread_registered();
+    let _guard = registry_lock();
+    let mut tasks = Vec::new();
+    unsafe {
+        for weak in registry_inner_mut().by_handle.values() {
+            if let Some(core) = weak.upgrade() {
+                let _g = core_lock(&core);
+                let inner = core_inner_mut(&core);
+                tasks.push(ThreadMetadata {
+                    thread: core.id as ThreadHandle,
+                    name: inner.name.clone(),
+                    stack_depth: inner.stack_depth,
+                    priority: inner.priority,
+                    thread_number: 0,
+                    state: inner.state,
+                    current_priority: inner.priority,
+                    base_priority: inner.priority,
+                    run_time_counter: 0,
+                    stack_high_water_mark: inner.stack_depth,
+                });
+            }
+        }
+    }
+    tasks
+}
+
+pub(crate) fn current_thread_state() -> ThreadState {
+    if let Some(core) = lookup_current() {
+        let _g = core_lock(&core);
+        unsafe { core_inner_mut(&core).state }
+    } else {
+        ThreadState::Running
+    }
+}
+
+// ---------------------------------------------------------------------------
+// pthread TLS for current-thread lookup
+// ---------------------------------------------------------------------------
+
+fn current_thread_key() -> libc::pthread_key_t {
+    static KEY: OnceLock<libc::pthread_key_t> = OnceLock::new();
+    *KEY.get_or_init(|| sys_thread::key_create(None).expect("POSIX thread TLS key create"))
+}
+
+fn set_current_thread_id(id: usize) {
+    let key = current_thread_key();
+    let ptr = id as *mut c_void;
+    unsafe {
+        sys_thread::key_set(key, ptr);
+    }
+}
+
+fn get_current_thread_id() -> Option<usize> {
+    let key = current_thread_key();
+    let ptr = unsafe { sys_thread::key_get(key) };
+    if ptr.is_null() {
+        None
+    } else {
+        Some(ptr as usize)
+    }
+}
+
+fn lookup_current() -> Option<Arc<ThreadCore>> {
+    let id = get_current_thread_id()?;
+    lookup_by_handle(id as ThreadHandle)
+}
+
+pub(crate) fn ensure_main_thread_registered() {
+    if get_current_thread_id().is_some() {
+        return;
+    }
+    let id = next_thread_id();
+    set_current_thread_id(id);
+    let core = MAIN_THREAD_CORE.get_or_init(|| {
+        let core = Arc::new(ThreadCore::new(id, "main", 0, 1));
+        // The main/external thread is already running — override the
+        // default Suspended state set by ThreadInner::new.
+        {
+            let _g = core_lock(&core);
+            let inner = unsafe { core_inner_mut(&core) };
+            inner.state = ThreadState::Running;
+        }
+        core
+    });
+    register_thread(id, core);
+}
+
+static MAIN_THREAD_CORE: OnceLock<Arc<ThreadCore>> = OnceLock::new();
+
+// ---------------------------------------------------------------------------
+// ThreadInner
+// ---------------------------------------------------------------------------
+
+struct ThreadInner {
+    id: usize,
     name: Bytes<MAX_TASK_NAME_LEN>,
     stack_depth: StackType,
     priority: UBaseType,
-    callback: Option<Arc<ThreadFnPtr>>,
+
+    state: ThreadState,
+    pthread: Option<sys_thread::PosixThread>,
+
+    spawn_started: bool,
+    joined: bool,
+    panic_payload: bool,
+    callback_result: Option<Result<ThreadParam>>,
+
+    /// Cooperative cancellation flag.
+    delete_requested: bool,
+
+    notification_value: u32,
+    notification_pending: bool,
+    waiting_notification: bool,
+}
+
+impl ThreadInner {
+    fn new(id: usize, name: &str, stack_depth: StackType, priority: UBaseType) -> Self {
+        Self {
+            id,
+            name: Bytes::from_str(name),
+            stack_depth,
+            priority,
+            state: ThreadState::Suspended,
+            pthread: None,
+            spawn_started: false,
+            joined: false,
+            panic_payload: false,
+            callback_result: None,
+            delete_requested: false,
+            notification_value: 0,
+            notification_pending: false,
+            waiting_notification: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ThreadCore
+// ---------------------------------------------------------------------------
+
+struct ThreadCore {
+    id: usize,
+    inner: PosixMutex,
+    condvar: PosixCondvar,
+    state: UnsafeCell<ThreadInner>,
+}
+
+unsafe impl Send for ThreadCore {}
+unsafe impl Sync for ThreadCore {}
+
+impl ThreadCore {
+    fn new(id: usize, name: &str, stack_depth: StackType, priority: UBaseType) -> Self {
+        Self {
+            id,
+            inner: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).expect("POSIX thread core mutex"),
+            condvar: PosixCondvar::new().expect("POSIX thread core condvar"),
+            state: UnsafeCell::new(ThreadInner::new(id, name, stack_depth, priority)),
+        }
+    }
+}
+
+// RAII core lock guard.
+struct CoreGuard<'a> {
+    core: &'a ThreadCore,
+}
+
+impl<'a> CoreGuard<'a> {
+    fn lock(core: &'a ThreadCore) -> Self {
+        assert!(core.inner.lock(), "failed to lock POSIX thread core mutex");
+        Self { core }
+    }
+}
+
+impl Drop for CoreGuard<'_> {
+    fn drop(&mut self) {
+        assert!(
+            self.core.inner.unlock(),
+            "failed to unlock POSIX thread core mutex"
+        );
+    }
+}
+
+fn core_lock(core: &ThreadCore) -> CoreGuard<'_> {
+    CoreGuard::lock(core)
+}
+
+/// Access ThreadInner — caller must hold the core mutex.
+#[inline]
+unsafe fn core_inner_mut(core: &ThreadCore) -> &mut ThreadInner {
+    &mut *core.state.get()
+}
+
+// ---------------------------------------------------------------------------
+// StartContext + trampoline
+// ---------------------------------------------------------------------------
+
+struct StartContext<F>
+where
+    F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam> + Send + Sync + 'static,
+{
+    id: usize,
+    core: Arc<ThreadCore>,
     param: Option<ThreadParam>,
+    callback: F,
+}
+
+extern "C" fn thread_trampoline<F>(arg: *mut c_void) -> *mut c_void
+where
+    F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam> + Send + Sync + 'static,
+{
+    let StartContext {
+        id,
+        core,
+        param,
+        callback,
+    } = unsafe { *Box::from_raw(arg as *mut StartContext<F>) };
+
+    set_current_thread_id(id);
+
+    // Mark running.
+    {
+        let _g = core_lock(&core);
+        let inner = unsafe { core_inner_mut(&core) };
+        inner.state = ThreadState::Running;
+    }
+
+    let boxed_self: Box<dyn ThreadFn> = Box::new(Thread {
+        core: Arc::clone(&core),
+        handle: id as ThreadHandle,
+    });
+
+    let result = catch_unwind(AssertUnwindSafe(|| callback(boxed_self, param)));
+
+    // Mark finished.
+    {
+        let _g = core_lock(&core);
+        let inner = unsafe { core_inner_mut(&core) };
+
+        match result {
+            Ok(Ok(p)) => inner.callback_result = Some(Ok(p)),
+            Ok(Err(e)) => inner.callback_result = Some(Err(e)),
+            Err(_) => inner.panic_payload = true,
+        }
+
+        inner.state = ThreadState::Deleted;
+    }
+
+    core.condvar.broadcast();
+    core::ptr::null_mut()
+}
+
+// ---------------------------------------------------------------------------
+// Thread
+// ---------------------------------------------------------------------------
+
+pub struct Thread {
+    core: Arc<ThreadCore>,
+    handle: ThreadHandle,
 }
 
 unsafe impl Send for Thread {}
 unsafe impl Sync for Thread {}
 
-impl Thread {
-    pub fn new(name: &str, stack_depth: StackType, priority: UBaseType) -> Self {
-        Self {
-            handle: null(),
-            name: Bytes::from_str(name),
-            stack_depth,
-            priority,
-            callback: None,
-            param: None,
-        }
-    }
-
-    pub fn new_with_handle(handle: ThreadHandle, name: &str, stack_depth: StackType, priority: UBaseType) -> Result<Self> {
-        if handle.is_null() {
-            return Err(Error::NullPtr);
-        }
-
-        Ok(Self {
-            handle,
-            name: Bytes::from_str(name),
-            stack_depth,
-            priority,
-            callback: None,
-            param: None,
-        })
-    }
-
-    pub fn new_with_to_priority(name: &str, stack_depth: StackType, priority: impl ToPriority) -> Self {
-        Self::new(name, stack_depth, priority.to_priority())
-    }
-
-    pub fn new_with_handle_and_to_priority(handle: ThreadHandle, name: &str, stack_depth: StackType, priority: impl ToPriority) -> Result<Self> {
-        Self::new_with_handle(handle, name, stack_depth, priority.to_priority())
-    }
-
-    pub fn get_metadata_from_handle(handle: ThreadHandle) -> ThreadMetadata {
-        if handle.is_null() {
-            return ThreadMetadata::default();
-        }
-
-        ThreadMetadata {
-            thread: handle,
-            name: Bytes::from_str("thread"),
-            stack_depth: 0,
-            priority: 0,
-            thread_number: 0,
-            state: ThreadState::Ready,
-            current_priority: 0,
-            base_priority: 0,
-            run_time_counter: 0,
-            stack_high_water_mark: 0,
-        }
-    }
-
-    pub fn get_metadata(thread: &Thread) -> ThreadMetadata {
-        if thread.handle.is_null() {
-            ThreadMetadata::default()
-        } else {
-            ThreadMetadata {
-                thread: thread.handle,
-                name: thread.name.clone(),
-                stack_depth: thread.stack_depth,
-                priority: thread.priority,
-                thread_number: 0,
-                state: ThreadState::Ready,
-                current_priority: thread.priority,
-                base_priority: thread.priority,
-                run_time_counter: 0,
-                stack_high_water_mark: 0,
-            }
-        }
-    }
-
-    #[inline]
-    pub fn wait_notification_with_to_tick(&self, bits_to_clear_on_entry: u32, bits_to_clear_on_exit: u32, timeout_ticks: impl ToTick) -> Result<u32> {
-        self.wait_notification(bits_to_clear_on_entry, bits_to_clear_on_exit, timeout_ticks.to_ticks())
-    }
-
-    fn metadata(&self) -> ThreadMetadata {
-        Self::get_metadata(self)
-    }
-}
-
-impl ThreadFn for Thread {
-    fn spawn<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
-    where
-        F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam>,
-        F: Send + Sync + 'static,
-        Self: Sized,
-    {
-        let func: Arc<ThreadFnPtr> = Arc::new(callback);
-        self.callback = Some(func);
-        self.param = param.clone();
-
-        if self.handle.is_null() {
-            self.handle = dummy_thread_handle();
-        }
-
-        Ok(Self {
-            handle: self.handle,
-            name: self.name.clone(),
-            stack_depth: self.stack_depth,
-            priority: self.priority,
-            callback: self.callback.clone(),
-            param,
-        })
-    }
-
-    fn spawn_simple<F>(&mut self, callback: F) -> Result<Self>
-    where
-        F: Fn() + Send + Sync + 'static,
-        Self: Sized,
-    {
-        let _ = callback;
-
-        if self.handle.is_null() {
-            self.handle = dummy_thread_handle();
-        }
-
-        Ok(self.clone())
-    }
-
-    fn delete(&self) {}
-
-    fn suspend(&self) {}
-
-    fn resume(&self) {}
-
-    fn join(&self, _retval: DoublePtr) -> Result<i32> {
-        Ok(0)
-    }
-
-    fn get_metadata(&self) -> ThreadMetadata {
-        self.metadata()
-    }
-
-    fn get_current() -> Self
-    where
-        Self: Sized,
-    {
-        Self {
-            handle: dummy_thread_handle(),
-            name: Bytes::from_str("current"),
-            stack_depth: 0,
-            priority: 0,
-            callback: None,
-            param: None,
-        }
-    }
-
-    fn notify(&self, _notification: ThreadNotification) -> Result<()> {
-        if self.handle.is_null() {
-            Err(Error::NullPtr)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn notify_from_isr(&self, _notification: ThreadNotification, higher_priority_task_woken: &mut BaseType) -> Result<()> {
-        *higher_priority_task_woken = 0;
-
-        if self.handle.is_null() {
-            Err(Error::NullPtr)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn wait_notification(&self, _bits_to_clear_on_entry: u32, _bits_to_clear_on_exit: u32, _timeout_ticks: TickType) -> Result<u32> {
-        if self.handle.is_null() {
-            Err(Error::NullPtr)
-        } else {
-            Err(Error::Timeout)
-        }
-    }
-}
-
 impl Deref for Thread {
     type Target = ThreadHandle;
-
     fn deref(&self) -> &Self::Target {
         &self.handle
     }
 }
 
+impl Clone for Thread {
+    fn clone(&self) -> Self {
+        Self {
+            core: Arc::clone(&self.core),
+            handle: self.handle,
+        }
+    }
+}
+
+impl Thread {
+    // -- constructors ---------------------------------------------------
+
+    pub fn new(name: &str, stack_depth: StackType, priority: UBaseType) -> Self {
+        let id = next_thread_id();
+        let handle = id as ThreadHandle;
+        let core = Arc::new(ThreadCore::new(id, name, stack_depth, priority));
+        register_thread(id, &core);
+        Self { core, handle }
+    }
+
+    pub fn new_with_handle(
+        _handle: ThreadHandle,
+        name: &str,
+        stack_depth: StackType,
+        priority: UBaseType,
+    ) -> Result<Self> {
+        Ok(Self::new(name, stack_depth, priority))
+    }
+
+    pub fn new_with_to_priority(
+        name: &str,
+        stack_depth: StackType,
+        priority: impl ToPriority,
+    ) -> Self {
+        Self::new(name, stack_depth, priority.to_priority())
+    }
+
+    pub fn new_with_handle_and_to_priority(
+        handle: ThreadHandle,
+        name: &str,
+        stack_depth: StackType,
+        priority: impl ToPriority,
+    ) -> Result<Self> {
+        Self::new_with_handle(handle, name, stack_depth, priority.to_priority())
+    }
+
+    // -- static helper --------------------------------------------------
+
+    pub fn get_metadata_from_handle(handle: ThreadHandle) -> ThreadMetadata {
+        if let Some(core) = lookup_by_handle(handle) {
+            let _g = core_lock(&core);
+            let inner = unsafe { core_inner_mut(&core) };
+            ThreadMetadata {
+                thread: core.id as ThreadHandle,
+                name: inner.name.clone(),
+                stack_depth: inner.stack_depth,
+                priority: inner.priority,
+                thread_number: 0,
+                state: inner.state,
+                current_priority: inner.priority,
+                base_priority: inner.priority,
+                run_time_counter: 0,
+                stack_high_water_mark: inner.stack_depth,
+            }
+        } else {
+            ThreadMetadata::default()
+        }
+    }
+
+    pub fn get_metadata(thread: &Thread) -> ThreadMetadata {
+        thread.get_metadata()
+    }
+
+    pub fn wait_notification_with_to_tick(
+        &self,
+        bits_clear_entry: u32,
+        bits_clear_exit: u32,
+        timeout: impl ToTick,
+    ) -> Result<u32> {
+        self.wait_notification(bits_clear_entry, bits_clear_exit, timeout.to_ticks())
+    }
+
+    // -- cancellation query helpers -------------------------------------
+
+    pub fn is_delete_requested(&self) -> bool {
+        let _g = core_lock(&self.core);
+        unsafe { core_inner_mut(&self.core).delete_requested }
+    }
+
+    pub fn is_cancellation_requested(&self) -> bool {
+        self.is_delete_requested()
+    }
+
+    pub fn current_cancellation_requested() -> bool {
+        Self::get_current().is_delete_requested()
+    }
+
+    // -- spawn helper ---------------------------------------------------
+
+    fn spawn_inner<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
+    where
+        F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let stack_size = {
+            let _g = core_lock(&self.core);
+            let inner = unsafe { core_inner_mut(&self.core) };
+            if inner.spawn_started || inner.pthread.is_some() {
+                return Err(Error::ThreadAlreadyStarted);
+            }
+            inner.spawn_started = true;
+            inner.state = ThreadState::Ready;
+            inner.stack_depth as usize
+        };
+
+        let ctx = Box::new(StartContext {
+            id: self.core.id,
+            core: Arc::clone(&self.core),
+            param,
+            callback,
+        });
+
+        let arg = Box::into_raw(ctx) as *mut c_void;
+
+        let pt = unsafe { sys_thread::create(Some(stack_size), thread_trampoline::<F>, arg) };
+
+        match pt {
+            Some(pt) => {
+                {
+                    let _g = core_lock(&self.core);
+                    let inner = unsafe { core_inner_mut(&self.core) };
+                    inner.pthread = Some(pt);
+                    // Do NOT overwrite state — child owns Running/Deleted.
+                }
+                Ok(Self {
+                    core: Arc::clone(&self.core),
+                    handle: self.handle,
+                })
+            }
+            None => {
+                // Rollback.
+                let _ = unsafe { Box::from_raw(arg as *mut StartContext<F>) };
+                {
+                    let _g = core_lock(&self.core);
+                    let inner = unsafe { core_inner_mut(&self.core) };
+                    inner.spawn_started = false;
+                    inner.state = ThreadState::Deleted;
+                }
+                Err(Error::OutOfMemory)
+            }
+        }
+    }
+
+    fn spawn_simple_inner<F>(&mut self, callback: F) -> Result<Self>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let wrapper =
+            move |_t: Box<dyn ThreadFn>, _p: Option<ThreadParam>| -> Result<ThreadParam> {
+                callback();
+                Ok(Arc::new(()))
+            };
+        self.spawn_inner(None, wrapper)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ThreadFn implementation
+// ---------------------------------------------------------------------------
+
+impl ThreadFn for Thread {
+    fn spawn<F>(&mut self, param: Option<ThreadParam>, callback: F) -> Result<Self>
+    where
+        F: Fn(Box<dyn ThreadFn>, Option<ThreadParam>) -> Result<ThreadParam>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.spawn_inner(param, callback)
+    }
+
+    fn spawn_simple<F>(&mut self, callback: F) -> Result<Self>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.spawn_simple_inner(callback)
+    }
+
+    fn delete(&self) {
+        let should_unregister = {
+            let _g = core_lock(&self.core);
+            let inner = unsafe { core_inner_mut(&self.core) };
+
+            inner.delete_requested = true;
+
+            if !inner.spawn_started || matches!(inner.state, ThreadState::Deleted) {
+                inner.state = ThreadState::Deleted;
+                true
+            } else {
+                false
+            }
+        };
+
+        self.core.condvar.broadcast();
+
+        if should_unregister {
+            unregister_thread(self.core.id);
+        }
+    }
+
+    fn suspend(&self) {}
+    fn resume(&self) {}
+
+    fn join(&self, _retval: DoublePtr) -> Result<i32> {
+        let pt = {
+            let _g = core_lock(&self.core);
+            let inner = unsafe { core_inner_mut(&self.core) };
+            if inner.joined {
+                return Err(Error::ThreadAlreadyJoined);
+            }
+            if !inner.spawn_started {
+                return Err(Error::ThreadNotStarted);
+            }
+            inner.joined = true;
+            inner.pthread.take()
+        };
+
+        if let Some(pt) = pt {
+            if !unsafe { sys_thread::join(pt) } {
+                unregister_thread(self.core.id);
+
+                let _g = core_lock(&self.core);
+                let inner = unsafe { core_inner_mut(&self.core) };
+                inner.state = ThreadState::Deleted;
+
+                return Err(Error::ThreadJoinFailed);
+            }
+
+            let result = {
+                let _g = core_lock(&self.core);
+                let inner = unsafe { core_inner_mut(&self.core) };
+                if inner.panic_payload {
+                    Err(Error::ThreadJoinFailed)
+                } else if matches!(&inner.callback_result, Some(Err(_))) {
+                    Err(Error::ThreadJoinFailed)
+                } else {
+                    Ok(0)
+                }
+            };
+
+            unregister_thread(self.core.id);
+
+            {
+                let _g = core_lock(&self.core);
+                let inner = unsafe { core_inner_mut(&self.core) };
+                inner.state = ThreadState::Deleted;
+            }
+
+            result
+        } else {
+            Err(Error::ThreadNotStarted)
+        }
+    }
+
+    fn get_metadata(&self) -> ThreadMetadata {
+        let _g = core_lock(&self.core);
+        let inner = unsafe { core_inner_mut(&self.core) };
+        ThreadMetadata {
+            thread: self.core.id as ThreadHandle,
+            name: inner.name.clone(),
+            stack_depth: inner.stack_depth,
+            priority: inner.priority,
+            thread_number: 0,
+            state: inner.state,
+            current_priority: inner.priority,
+            base_priority: inner.priority,
+            run_time_counter: 0,
+            stack_high_water_mark: inner.stack_depth,
+        }
+    }
+
+    fn get_current() -> Self {
+        if let Some(id) = get_current_thread_id() {
+            if let Some(core) = lookup_by_handle(id as ThreadHandle) {
+                return Self {
+                    core: Arc::clone(&core),
+                    handle: id as ThreadHandle,
+                };
+            }
+        }
+
+        // Lazy registration for main / non-OSAL threads.
+        let id = next_thread_id();
+        let handle = id as ThreadHandle;
+        let core = Arc::new(ThreadCore::new(id, "main", 0, 1));
+        // Override: main thread starts in Running state.
+        {
+            let _g = core_lock(&core);
+            let inner = unsafe { core_inner_mut(&core) };
+            inner.state = ThreadState::Running;
+        }
+        register_thread(id, &core);
+        set_current_thread_id(id);
+        Self { core, handle }
+    }
+
+    fn notify(&self, notification: ThreadNotification) -> Result<()> {
+        let _g = core_lock(&self.core);
+        let inner = unsafe { core_inner_mut(&self.core) };
+        let (action, value) = notification.into();
+        match action {
+            0 => {}
+            1 => inner.notification_value |= value,
+            2 => inner.notification_value = inner.notification_value.wrapping_add(1),
+            3 => inner.notification_value = value,
+            4 => {
+                if inner.notification_pending {
+                    return Err(Error::QueueFull);
+                }
+                inner.notification_value = value;
+            }
+            _ => {}
+        }
+        inner.notification_pending = true;
+        // Broadcast while holding the mutex — this is the standard
+        // pattern for PosixCondvar (wake waiters before releasing).
+        self.core.condvar.broadcast();
+        Ok(())
+    }
+
+    fn notify_from_isr(&self, notification: ThreadNotification, hpw: &mut BaseType) -> Result<()> {
+        // Non-blocking try-lock.
+        if !self.core.inner.try_lock() {
+            *hpw = 0;
+            return Err(Error::QueueFull);
+        }
+        let inner = unsafe { core_inner_mut(&self.core) };
+        let (action, value) = notification.into();
+        match action {
+            0 => {}
+            1 => inner.notification_value |= value,
+            2 => inner.notification_value = inner.notification_value.wrapping_add(1),
+            3 => inner.notification_value = value,
+            4 => {
+                if inner.notification_pending {
+                    assert!(
+                        self.core.inner.unlock(),
+                        "failed to unlock POSIX thread core mutex"
+                    );
+                    *hpw = 0;
+                    return Err(Error::QueueFull);
+                }
+                inner.notification_value = value;
+            }
+            _ => {}
+        }
+        let was_waiting = inner.waiting_notification || inner.state == ThreadState::Blocked;
+        inner.notification_pending = true;
+        *hpw = if was_waiting { 1 } else { 0 };
+        assert!(
+            self.core.inner.unlock(),
+            "failed to unlock POSIX thread core mutex"
+        );
+        self.core.condvar.broadcast();
+        Ok(())
+    }
+
+    fn wait_notification(
+        &self,
+        bits_clear_entry: u32,
+        bits_clear_exit: u32,
+        timeout_ticks: TickType,
+    ) -> Result<u32> {
+        let _g = core_lock(&self.core);
+        let inner = unsafe { core_inner_mut(&self.core) };
+
+        inner.notification_value &= !bits_clear_entry;
+
+        // Fast path.
+        if inner.notification_pending {
+            let v = inner.notification_value;
+            inner.notification_value &= !bits_clear_exit;
+            inner.notification_pending = false;
+            return Ok(v);
+        }
+
+        // Cancellation / deletion takes priority.
+        if inner.delete_requested || inner.state == ThreadState::Deleted {
+            return Err(Error::Timeout);
+        }
+
+        if timeout_ticks == 0 {
+            return Err(Error::Timeout);
+        }
+
+        // Infinite wait.
+        if timeout_ticks == TickType::MAX {
+            inner.waiting_notification = true;
+            inner.state = ThreadState::Blocked;
+            loop {
+                self.core.condvar.wait(&self.core.inner);
+
+                let inner2 = unsafe { core_inner_mut(&self.core) };
+
+                if inner2.delete_requested || inner2.state == ThreadState::Deleted {
+                    inner2.waiting_notification = false;
+                    if !matches!(inner2.state, ThreadState::Deleted) {
+                        inner2.state = ThreadState::Running;
+                    }
+                    return Err(Error::Timeout);
+                }
+
+                if inner2.notification_pending {
+                    let v = inner2.notification_value;
+                    inner2.notification_value &= !bits_clear_exit;
+                    inner2.notification_pending = false;
+                    inner2.waiting_notification = false;
+                    inner2.state = ThreadState::Running;
+                    return Ok(v);
+                }
+            }
+        }
+
+        // Finite wait with CLOCK_MONOTONIC deadline.
+        let timeout_ms = (timeout_ticks as u64).saturating_mul(TICK_PERIOD_MS);
+        let deadline = clock::deadline_from_ms(timeout_ms);
+
+        inner.waiting_notification = true;
+        inner.state = ThreadState::Blocked;
+
+        loop {
+            let signaled = self.core.condvar.timedwait(&self.core.inner, &deadline);
+
+            let inner2 = unsafe { core_inner_mut(&self.core) };
+
+            if inner2.delete_requested || inner2.state == ThreadState::Deleted {
+                inner2.waiting_notification = false;
+                if !matches!(inner2.state, ThreadState::Deleted) {
+                    inner2.state = ThreadState::Running;
+                }
+                return Err(Error::Timeout);
+            }
+
+            if inner2.notification_pending {
+                let v = inner2.notification_value;
+                inner2.notification_value &= !bits_clear_exit;
+                inner2.notification_pending = false;
+                inner2.waiting_notification = false;
+                inner2.state = ThreadState::Running;
+                return Ok(v);
+            }
+
+            if !signaled {
+                inner2.waiting_notification = false;
+                inner2.state = ThreadState::Running;
+                return Err(Error::Timeout);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Debug / Display
+// ---------------------------------------------------------------------------
+
 impl Debug for Thread {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Thread")
-            .field("handle", &self.handle)
-            .field("name", &self.name)
-            .field("stack_depth", &self.stack_depth)
-            .field("priority", &self.priority)
-            .field("callback", &self.callback.as_ref().map(|_| "Some(...)"))
-            .field("param", &self.param)
-            .finish()
+        if self.core.inner.try_lock() {
+            let inner = unsafe { core_inner_mut(&self.core) };
+            let result = f
+                .debug_struct("Thread")
+                .field("id", &self.core.id)
+                .field("name", &inner.name)
+                .field("priority", &inner.priority)
+                .field("state", &inner.state)
+                .field("delete_requested", &inner.delete_requested)
+                .field("spawn_started", &inner.spawn_started)
+                .field("joined", &inner.joined)
+                .finish();
+            assert!(
+                self.core.inner.unlock(),
+                "failed to unlock POSIX thread core mutex"
+            );
+            result
+        } else {
+            f.debug_struct("Thread")
+                .field("id", &self.core.id)
+                .finish_non_exhaustive()
+        }
     }
 }
 
 impl Display for Thread {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "Thread {{ handle: {:?}, name: {}, priority: {}, stack_depth: {} }}",
-            self.handle,
-            self.name,
-            self.priority,
-            self.stack_depth
-        )
+        if self.core.inner.try_lock() {
+            let inner = unsafe { core_inner_mut(&self.core) };
+            let result = write!(
+                f,
+                "Thread {{ id: {}, name: {}, priority: {}, state: {:?}, delete_requested: {} }}",
+                self.core.id, inner.name, inner.priority, inner.state, inner.delete_requested
+            );
+            assert!(
+                self.core.inner.unlock(),
+                "failed to unlock POSIX thread core mutex"
+            );
+            result
+        } else {
+            write!(f, "Thread {{ id: {}, locked: true }}", self.core.id)
+        }
     }
 }
