@@ -1014,9 +1014,9 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// // Truncation example
     /// let long_string = CString::new("This is a very long string").unwrap();
     /// let short_bytes = Bytes::<8>::from_char_ptr(long_string.as_ptr());
-    /// // Only first 8 bytes are copied
+    /// // truncated to SIZE - 1 content bytes, with NUL preserved
     /// ```
-    pub fn from_char_ptr(ptr: *const c_char) -> Self {
+    pub unsafe fn from_char_ptr(ptr: *const c_char) -> Self {
         if ptr.is_null() {
             return Self::new();
         }
@@ -1057,9 +1057,9 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// // Truncation example
     /// let long_data = [b'T', b'h', b'i', b's', b' ', b'i', b's', b' ', b'v', b'e', b'r', b'y', b' ', b'l', b'o', b'n', b'g', 0];
     /// let short_bytes = Bytes::<8>::from_uchar_ptr(long_data.as_ptr());
-    /// // Only first 8 bytes are copied
+    /// // truncated to SIZE bytes (raw byte copy, no NUL reserved)
     /// ```
-    pub fn from_uchar_ptr(ptr: *const c_uchar) -> Self {
+    pub unsafe fn from_uchar_ptr(ptr: *const c_uchar) -> Self {
         if ptr.is_null() {
             return Self::new();
         }
@@ -1073,6 +1073,37 @@ impl<const SIZE: usize> Bytes<SIZE> {
             }
             array[i] = *byte;
             i += 1;
+        }
+
+        Self(array)
+    }
+
+    /// Creates a new `Bytes` instance from a safe `&[c_uchar]` slice.
+    ///
+    /// This is the safe alternative to [`from_uchar_ptr`](Self::from_uchar_ptr).
+    /// It copies at most `SIZE` bytes from the slice. Unlike the C-string
+    /// constructors, this method does **not** reserve a NUL terminator — it
+    /// is a raw byte copy and may fill the entire `[u8; SIZE]` buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use osal_rs::utils::Bytes;
+    /// use core::ffi::c_uchar;
+    ///
+    /// let data: &[c_uchar] = &[b'H' as c_uchar, b'e' as c_uchar, b'l' as c_uchar];
+    /// let bytes = Bytes::<16>::from_uchar_slice(data);
+    /// assert_eq!(bytes.as_raw_bytes(), b"Hel");
+    /// ```
+    #[inline]
+    pub fn from_uchar_slice(bytes: &[c_uchar]) -> Self {
+        let mut array = [0u8; SIZE];
+        let len = core::cmp::min(bytes.len(), SIZE);
+
+        if len > 0 {
+            array[..len].copy_from_slice(unsafe {
+                core::slice::from_raw_parts(bytes.as_ptr() as *const u8, len)
+            });
         }
 
         Self(array)
@@ -1221,11 +1252,32 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// // Truncation example
     /// let long_string = CString::new("This is a very long string").unwrap();
     /// let short_bytes = Bytes::<8>::from_cstr(long_string.as_ptr());
-    /// // Only first 8 bytes are copied
+    /// // truncated to SIZE - 1 content bytes, with NUL preserved
     /// ```
     #[inline]
-    pub fn from_cstr(str: *const c_char) -> Self {
+    pub unsafe fn from_cstr(str: *const c_char) -> Self {
         Self::from_char_ptr(str)
+    }
+
+    /// Creates a new `Bytes` instance from a safe `&CStr` reference.
+    ///
+    /// This is the safe alternative to [`from_cstr`](Self::from_cstr) and
+    /// [`from_char_ptr`](Self::from_char_ptr). It copies at most
+    /// `SIZE - 1` content bytes, always preserving a NUL terminator.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use osal_rs::utils::Bytes;
+    /// use core::ffi::CStr;
+    ///
+    /// let cstr = CStr::from_bytes_with_nul(b"Hello\0").unwrap();
+    /// let bytes = Bytes::<16>::from_cstr_ref(cstr);
+    /// assert_eq!(bytes.as_str(), "Hello");
+    /// ```
+    #[inline]
+    pub fn from_cstr_ref(cstr: &CStr) -> Self {
+        Self::from_cstr_bytes(cstr.to_bytes())
     }
 
     /// Attempts to interpret the internal buffer as a C string.
@@ -1672,7 +1724,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     /// assert_eq!(empty.as_raw_bytes(), b"");
     ///
     /// let full = Bytes::<4>::from_str("ABCD");
-    /// assert_eq!(full.as_raw_bytes(), b"ABCD");
+    /// assert_eq!(full.as_raw_bytes(), b"ABC");
     /// ```
     #[inline]
     pub fn as_raw_bytes(&self) -> &[u8] {
@@ -1883,7 +1935,7 @@ impl<const SIZE: usize> Bytes<SIZE> {
     ///
     /// let bytes = Bytes::<8>::from_str("example");
     /// let byte_slice = bytes.to_bytes();
-    /// assert_eq!(byte_slice, b"example\0\0");
+    /// assert_eq!(byte_slice, b"example\0");
     /// ```
     #[inline]
     pub fn to_bytes(&self) -> &[u8] {
@@ -2285,7 +2337,7 @@ mod tests {
     /// `from_cstr(null)` must return an empty Bytes without UB.
     #[test]
     fn bytes_from_cstr_null_returns_empty() {
-        let bytes = Bytes::<8>::from_cstr(core::ptr::null());
+        let bytes = unsafe { Bytes::<8>::from_cstr(core::ptr::null()) };
 
         assert_eq!(bytes.len(), 0);
         assert_eq!(bytes.as_str(), "");

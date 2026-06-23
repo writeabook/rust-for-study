@@ -140,7 +140,7 @@ impl From<(ThreadHandle, TaskStatus)> for ThreadMetadata {
 
         ThreadMetadata {
             thread: status.0,
-            name: Bytes::from_char_ptr(status.1.pcTaskName),
+            name: unsafe { Bytes::from_char_ptr(status.1.pcTaskName) },
             // Avoid dereferencing pxStackBase, which may be null or otherwise invalid.
             // Use 0 as a safe default for unknown stack depth.
             stack_depth: 0,
