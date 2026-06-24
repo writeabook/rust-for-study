@@ -8,6 +8,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use core::ptr;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -24,6 +25,13 @@ use crate::utils::{Error, OsalRsBool, Result};
 // RawMutex — recursive
 // ===========================================================================
 
+/// Monotonic counter for `RawMutex` and `Mutex<T>` handles.
+///
+/// Using a counter instead of `PosixMutex::raw_ptr()` guarantees that two
+/// live mutexes never get the same handle, even when the allocator reuses
+/// memory or NLL drops a value early.
+static NEXT_MUTEX_HANDLE: AtomicUsize = AtomicUsize::new(1);
+
 pub struct RawMutex {
     inner: PosixMutex,
     handle: MutexHandle,
@@ -35,7 +43,7 @@ unsafe impl Sync for RawMutex {}
 impl RawMutex {
     pub fn new() -> Result<Self> {
         let inner = PosixMutex::new(PTHREAD_MUTEX_RECURSIVE).ok_or(Error::OutOfMemory)?;
-        let handle = inner.raw_ptr() as MutexHandle;
+        let handle = NEXT_MUTEX_HANDLE.fetch_add(1, Ordering::Relaxed) as MutexHandle;
         Ok(Self { inner, handle })
     }
 }
@@ -115,7 +123,7 @@ impl<T: ?Sized> Deref for Mutex<T> {
 impl<T> Mutex<T> {
     pub fn new(data: T) -> Self {
         let inner = PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).expect("Mutex: pthread_mutex_init");
-        let handle = inner.raw_ptr() as MutexHandle;
+        let handle = NEXT_MUTEX_HANDLE.fetch_add(1, Ordering::Relaxed) as MutexHandle;
         Self {
             inner,
             data: UnsafeCell::new(Box::new(data)),

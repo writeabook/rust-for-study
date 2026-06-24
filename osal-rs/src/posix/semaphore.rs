@@ -13,6 +13,7 @@
 use core::cell::UnsafeCell;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::sys::clock;
 use super::sys::condvar::PosixCondvar;
@@ -23,6 +24,10 @@ use crate::traits::ToTick;
 use crate::utils::{Error, OsalRsBool, Result};
 
 use libc::PTHREAD_MUTEX_ERRORCHECK;
+
+/// Monotonic counter for `Semaphore` handles — guarantees uniqueness across
+/// live instances regardless of allocator reuse.
+static NEXT_SEMAPHORE_HANDLE: AtomicUsize = AtomicUsize::new(1);
 
 pub struct Semaphore {
     mtx: PosixMutex,
@@ -42,7 +47,7 @@ impl Semaphore {
         }
         let mtx = PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).ok_or(Error::OutOfMemory)?;
         let cond = PosixCondvar::new().ok_or(Error::OutOfMemory)?;
-        let handle = mtx.raw_ptr() as SemaphoreHandle;
+        let handle = NEXT_SEMAPHORE_HANDLE.fetch_add(1, Ordering::Relaxed) as SemaphoreHandle;
         Ok(Self {
             mtx,
             cond,

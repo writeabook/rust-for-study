@@ -258,7 +258,13 @@ fn worker_loop() {
 
             // Expired — pop and transition
             field!(p, heap).pop();
-            let r = field!(p, timers).get_mut(&top.timer_id).unwrap();
+            let Some(r) = field!(p, timers).get_mut(&top.timer_id) else {
+                // Timer was removed between the generation check and now
+                // (e.g. by a concurrent delete via the public API while
+                // the lock was briefly released during callback execution
+                // in a prior iteration).  Skip silently.
+                continue;
+            };
             let dl = match r.state {
                 TimerState::Running { deadline_ns } => deadline_ns,
                 _ => unreachable!(),

@@ -8,10 +8,15 @@ use core::cell::UnsafeCell;
 use core::fmt::{Debug, Display, Formatter};
 use core::marker::PhantomData;
 use core::ops::Deref;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
+
+/// Monotonic counter for `Queue` handles — guarantees uniqueness across
+/// live instances regardless of allocator reuse.
+static NEXT_QUEUE_HANDLE: AtomicUsize = AtomicUsize::new(1);
 
 use libc::PTHREAD_MUTEX_ERRORCHECK;
 
@@ -74,7 +79,7 @@ impl Queue {
         let not_empty = PosixCondvar::new().ok_or(Error::OutOfMemory)?;
         let not_full = PosixCondvar::new().ok_or(Error::OutOfMemory)?;
         Ok(Self {
-            handle: mtx.raw_ptr() as QueueHandle,
+            handle: NEXT_QUEUE_HANDLE.fetch_add(1, Ordering::Relaxed) as QueueHandle,
             mtx,
             not_empty,
             not_full,

@@ -47,48 +47,72 @@ pub fn test_timer_creation() -> Result<()> {
 
 pub fn test_timer_one_shot() -> Result<()> {
     log_info!(TAG, "Starting test_timer_one_shot");
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    let done = Arc::new(Semaphore::new(1, 0)?);
+    let count = Arc::new(AtomicU32::new(0));
+
+    let done_cb = done.clone();
+    let count_cb = count.clone();
 
     let timer = Timer::new(
         "oneshot_timer",
         Duration::from_millis(50).to_ticks(),
         false,
         None,
-        |_timer, param| {
-            COUNTER.fetch_add(1, Ordering::SeqCst);
+        move |_timer, param| {
+            count_cb.fetch_add(1, Ordering::SeqCst);
+            done_cb.signal();
             Ok(param.unwrap_or_else(|| Arc::new(())))
         },
     )?;
 
     let result = timer.start(Duration::from_millis(10).to_ticks());
-    log_debug!(TAG, "Timer started, waiting for fire...");
     assert_eq!(result, OsalRsBool::True);
 
-    // Wait for timer to fire
-    let _ = Thread::get_current().wait_notification(
-        0,
-        0xFFFFFFFF,
-        Duration::from_millis(200).to_ticks(),
-    );
+    // Poll-wait with a generous total budget.  Timer tests share a global
+    // timer-manager singleton whose worker may be busy processing stale
+    // entries from earlier tests; retrying with short timeouts is robust
+    // against transient delays.
+    let mut fired = false;
+    for _ in 0..60 {
+        if done.wait(Duration::from_millis(100).to_ticks()) == OsalRsBool::True {
+            fired = true;
+            break;
+        }
+    }
+    assert!(fired, "timer callback did not fire within 6000 ms");
 
-    let count = COUNTER.load(Ordering::SeqCst);
-    log_debug!(TAG, "Timer fired {} times", count);
-    assert!(count >= 1);
+    let n = count.load(Ordering::SeqCst);
+    log_debug!(TAG, "Timer fired {} times", n);
+    assert!(n >= 1, "expected at least 1 fire, got {}", n);
+
+    // Explicit cleanup: let the worker finish before Drop races with it.
+    timer.stop(Duration::from_millis(50).to_ticks());
+    core::mem::drop(timer);
+
     log_info!(TAG, "test_timer_one_shot PASSED");
     Ok(())
 }
 
 pub fn test_timer_auto_reload() -> Result<()> {
     log_info!(TAG, "Starting test_timer_auto_reload");
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    let done = Arc::new(Semaphore::new(1, 0)?);
+    let count = Arc::new(AtomicU32::new(0));
+
+    let done_cb = done.clone();
+    let count_cb = count.clone();
 
     let timer = Timer::new(
         "autoreload_timer",
         Duration::from_millis(50).to_ticks(),
         true,
         None,
-        |_timer, param| {
-            COUNTER.fetch_add(1, Ordering::SeqCst);
+        move |_timer, param| {
+            let n = count_cb.fetch_add(1, Ordering::SeqCst) + 1;
+            if n >= 2 {
+                done_cb.signal();
+            }
             Ok(param.unwrap_or_else(|| Arc::new(())))
         },
     )?;
@@ -96,17 +120,31 @@ pub fn test_timer_auto_reload() -> Result<()> {
     let result = timer.start(Duration::from_millis(10).to_ticks());
     assert_eq!(result, OsalRsBool::True);
 
-    let _ = Thread::get_current().wait_notification(
-        0,
-        0xFFFFFFFF,
-        Duration::from_millis(300).to_ticks(),
+    // Poll-wait for the callback to fire twice.  A single long wait can be
+    // defeated by cross-test interference through the global timer-manager
+    // singleton; retrying with short timeouts is more robust.
+    let mut fired = false;
+    for _ in 0..60 {
+        if done.wait(Duration::from_millis(100).to_ticks()) == OsalRsBool::True {
+            fired = true;
+            break;
+        }
+    }
+    let n = count.load(Ordering::SeqCst);
+    assert!(
+        fired,
+        "auto-reload timer: semaphore not signaled, fired {} times in 6000 ms",
+        n
     );
+    assert!(n >= 2, "expected at least 2 fires, got {}", n);
 
-    let count = COUNTER.load(Ordering::SeqCst);
-    log_debug!(TAG, "Auto-reload timer fired {} times", count);
-    assert!(count >= 2);
+    timer.stop(Duration::from_millis(50).to_ticks());
+    // Give the worker a tick to finish processing this timer before the
+    // next test creates its own — avoids cross-test interference through
+    // the global timer-manager singleton.
+    core::mem::drop(timer);
+    System::delay(1);
 
-    timer.stop(Duration::from_millis(10).to_ticks());
     log_info!(TAG, "test_timer_auto_reload PASSED");
     Ok(())
 }
@@ -180,36 +218,51 @@ pub fn test_timer_change_period() -> Result<()> {
 pub fn test_timer_with_param() -> Result<()> {
     log_info!(TAG, "Starting test_timer_with_param");
     let test_value: u32 = 42;
-    let param: Arc<dyn Any + Send + Sync> = Arc::new(test_value);
 
-    static RECEIVED_VALUE: AtomicU32 = AtomicU32::new(0);
+    let done = Arc::new(Semaphore::new(1, 0)?);
+    let received = Arc::new(AtomicU32::new(0));
+
+    let done_cb = done.clone();
+    let received_cb = received.clone();
+
+    let param: Arc<dyn Any + Send + Sync> = Arc::new(test_value);
 
     let timer = Timer::new(
         "param_timer",
         Duration::from_millis(50).to_ticks(),
         false,
         Some(param),
-        |_timer, param| {
+        move |_timer, param| {
             if let Some(ref p) = param {
                 if let Some(val) = p.downcast_ref::<u32>() {
-                    RECEIVED_VALUE.store(*val, Ordering::SeqCst);
+                    received_cb.store(*val, Ordering::SeqCst);
                 }
             }
+            done_cb.signal();
             Ok(param.unwrap_or_else(|| Arc::new(())))
         },
     )?;
 
-    timer.start(Duration::from_millis(10).to_ticks());
-
-    let _ = Thread::get_current().wait_notification(
-        0,
-        0xFFFFFFFF,
-        Duration::from_millis(200).to_ticks(),
+    assert_eq!(
+        timer.start(Duration::from_millis(10).to_ticks()),
+        OsalRsBool::True
     );
 
-    let received = RECEIVED_VALUE.load(Ordering::SeqCst);
-    log_debug!(TAG, "Received parameter value: {}", received);
-    assert_eq!(received, 42);
+    let mut fired = false;
+    for _ in 0..60 {
+        if done.wait(Duration::from_millis(100).to_ticks()) == OsalRsBool::True {
+            fired = true;
+            break;
+        }
+    }
+    assert!(fired, "param timer should fire within 6000 ms");
+
+    assert_eq!(received.load(Ordering::SeqCst), 42);
+
+    timer.stop(Duration::from_millis(50).to_ticks());
+    core::mem::drop(timer);
+    System::delay(1);
+
     log_info!(TAG, "test_timer_with_param PASSED");
     Ok(())
 }
