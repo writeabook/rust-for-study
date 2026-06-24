@@ -175,7 +175,10 @@ extern "C" fn init_critical_depth_key() {
 /// initialised to 0.
 fn critical_depth_ptr() -> *mut usize {
     unsafe {
-        libc::pthread_once(&raw mut CRITICAL_DEPTH_KEY_ONCE, Some(init_critical_depth_key));
+        libc::pthread_once(
+            &raw mut CRITICAL_DEPTH_KEY_ONCE,
+            Some(init_critical_depth_key),
+        );
 
         let ptr = libc::pthread_getspecific(CRITICAL_DEPTH_KEY) as *mut usize;
         if !ptr.is_null() {
