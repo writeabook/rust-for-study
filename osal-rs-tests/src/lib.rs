@@ -24,8 +24,9 @@ extern crate alloc;
 
 mod common;
 
-// New layered test modules
-#[cfg(test)]
+// Layered test modules
+// api/ is NOT behind #[cfg(test)] because the FreeRTOS backend runner
+// exposes pub fn run_all_tests() for use from embedded firmware.
 mod api;
 
 #[cfg(test)]

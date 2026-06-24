@@ -29,15 +29,15 @@ pub fn run_all_tests() -> Result<()> {
     log_info!(TAG, "   Starting FreeRTOS Test Suite");
     log_info!(TAG, "========================================\n");
 
-    crate::common::duration_tests::run_all_tests()?;
-    crate::common::event_group_tests::run_all_tests()?;
-    crate::common::mutex_tests::run_all_tests()?;
-    crate::common::queue_tests::run_all_tests()?;
-    crate::common::semaphore_tests::run_all_tests()?;
-    crate::common::system_tests::run_all_tests()?;
-    crate::common::thread_tests::run_all_tests()?;
-    crate::common::timer_tests::run_all_tests()?;
-    crate::common::api_surface::run_all_tests()?;
+    crate::api::duration_tests::run_all_tests()?;
+    crate::api::event_group_tests::run_all_tests()?;
+    crate::api::mutex_tests::run_all_tests()?;
+    crate::api::queue_tests::run_all_tests()?;
+    crate::api::semaphore_tests::run_all_tests()?;
+    crate::api::system_tests::run_all_tests()?;
+    crate::api::thread_tests::run_all_tests()?;
+    crate::api::timer_tests::run_all_tests()?;
+    crate::api::api_surface::run_all_tests()?;
 
     log_info!(TAG, "\n========================================");
     log_info!(TAG, "   All FreeRTOS Tests PASSED!");
