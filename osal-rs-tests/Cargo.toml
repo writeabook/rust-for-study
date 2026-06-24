@@ -12,7 +12,7 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [features]
-default = ["freertos"]
+default = ["posix"]
 freertos = ["osal-rs/freertos"]
 linux = ["osal-rs/linux"]
 posix = ["osal-rs/posix"]
