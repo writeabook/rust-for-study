@@ -24,6 +24,19 @@ extern crate alloc;
 
 mod common;
 
+// New layered test modules
+#[cfg(test)]
+mod api;
+
+#[cfg(test)]
+mod unit;
+
+#[cfg(test)]
+mod coverage;
+
+#[cfg(test)]
+mod port;
+
 #[cfg(feature = "freertos")]
 pub mod freertos;
 
