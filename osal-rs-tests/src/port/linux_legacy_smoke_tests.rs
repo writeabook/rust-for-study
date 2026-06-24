@@ -8,7 +8,7 @@
 //! Each section was migrated from the previous `linux/` submodule files.
 
 use osal_rs::os::*;
-use osal_rs::utils::Result;
+use osal_rs::utils::{OsalRsBool, Result};
 
 
 mod linux_legacy_event_group_tests {
@@ -2266,4 +2266,95 @@ pub fn run_all_tests() -> Result<()> {
 #[test]
 fn timer_tests_smoke() {
     linux_legacy_timer_tests::run_all_tests().unwrap();
+}
+
+// ===========================================================================
+// Minimal port smoke tests — create / use / destroy for each OSAL primitive.
+// These replace the old *_smoke wrappers above once old content is migrated.
+// ===========================================================================
+
+#[test]
+fn smoke_thread_create_run_join() {
+    let mut t = Thread::new("smoke_th", 4096, 1);
+    let done = alloc::sync::Arc::new(Mutex::new(false));
+    let done2 = done.clone();
+    t.spawn_simple(move || {
+        *done2.lock().unwrap() = true;
+    })
+    .unwrap();
+    // Join implicitly waits for thread exit on Linux/POSIX; on FreeRTOS the
+    // thread already ran to completion.
+    let _ = t.join(core::ptr::null_mut());
+    assert!(*done.lock().unwrap());
+}
+
+#[test]
+fn smoke_semaphore_create_signal_wait() {
+    let sem = Semaphore::new(1, 0).unwrap();
+    assert_eq!(sem.signal(), OsalRsBool::True);
+    assert_eq!(sem.wait(core::time::Duration::from_millis(100)), OsalRsBool::True);
+}
+
+#[test]
+fn smoke_mutex_create_lock_unlock() {
+    let m = Mutex::new(0u32);
+    {
+        let mut g = m.lock().unwrap();
+        *g = 42;
+    }
+    assert_eq!(*m.lock().unwrap(), 42);
+}
+
+#[test]
+fn smoke_queue_create_send_receive() {
+    let q = Queue::new(4, 4).unwrap();
+    let data = [1u8, 2, 3, 4];
+    let mut buf = [0u8; 4];
+    q.post(&data, 0).unwrap();
+    q.fetch(&mut buf, 0).unwrap();
+    assert_eq!(buf, data);
+}
+
+#[test]
+fn smoke_event_group_create_set_wait() {
+    let eg = EventGroup::new().unwrap();
+    eg.set(0b0001);
+    let bits = eg.wait(0b0001, 0);
+    assert_ne!(bits & 0b0001, 0);
+}
+
+#[test]
+fn smoke_timer_one_shot_fires() {
+    let fired = alloc::sync::Arc::new(Mutex::new(false));
+    let f2 = fired.clone();
+    let dummy: TimerParam = alloc::sync::Arc::new(0u32);
+    let mut t = Timer::new(
+        "smoke_tmr",
+        1,
+        false,
+        Some(dummy.clone()),
+        move |_, p| {
+            *f2.lock().unwrap() = true;
+            Ok(p.unwrap_or(dummy.clone()))
+        },
+    )
+    .unwrap();
+    let _ = t.start(100); // ensure command is queued
+    // Wait for timer to fire — loose polling with bounded timeout.
+    for _ in 0..100 {
+        System::delay(1);
+        if *fired.lock().unwrap() {
+            break;
+        }
+    }
+    let _ = t.stop(0);
+    assert!(*fired.lock().unwrap());
+}
+
+#[test]
+fn smoke_system_sleep_and_time() {
+    let t0 = System::get_current_time_us();
+    System::delay(1);
+    let t1 = System::get_current_time_us();
+    assert!(t1 >= t0);
 }
