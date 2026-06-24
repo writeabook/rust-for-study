@@ -13,13 +13,12 @@
 //!   per-thread nesting depth — simulates mutual exclusion among OSAL callers
 //!   but does NOT disable OS scheduling or hardware interrupts.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::cell::RefCell;
+use core::ffi::c_void;
 use core::time::Duration;
 
 use libc::{PTHREAD_MUTEX_RECURSIVE, nanosleep};
-
-use std::sync::OnceLock;
 
 use super::config::TICK_PERIOD_MS;
 use super::sys::clock;
@@ -34,11 +33,28 @@ use crate::utils::OsalRsBool;
 // Startup-time anchor
 // ---------------------------------------------------------------------------
 
+/// pthread_once-based global init for the startup monotonic timestamp.
+///
+/// # Safety
+///
+/// `pthread_once` guarantees exactly-once semantics.  The raw pointer /
+/// `static mut` access is protected by this guard.
+static mut START_NS_ONCE: libc::pthread_once_t = libc::PTHREAD_ONCE_INIT;
+static mut START_NS: u64 = 0;
+
+extern "C" fn init_start_ns() {
+    unsafe {
+        START_NS = clock::now_ns();
+    }
+}
+
 /// Returns the monotonic nanosecond timestamp captured the first time any
 /// OSAL timing function is called.
 fn startup_ns() -> u64 {
-    static START_NS: OnceLock<u64> = OnceLock::new();
-    *START_NS.get_or_init(clock::now_ns)
+    unsafe {
+        libc::pthread_once(&raw mut START_NS_ONCE, Some(init_start_ns));
+        START_NS
+    }
 }
 
 /// Nanoseconds elapsed since the startup anchor.
@@ -96,22 +112,90 @@ fn sleep_ticks(ticks: TickType) {
 // Global critical-section lock
 // ---------------------------------------------------------------------------
 
-fn global_critical_lock() -> &'static PosixMutex {
-    static LOCK: OnceLock<PosixMutex> = OnceLock::new();
+/// pthread_once-based global init for the critical-section mutex.
+///
+/// Initialisation failure is fatal (`expect` aborts).  The mutex is leaked
+/// (process-lifetime), which matches OSAL global-singleton semantics.
+///
+/// # Safety
+///
+/// `pthread_once` guarantees exactly-once semantics.  The raw pointer deref
+/// is safe because the pointer is only written once before any read.
+static mut CRITICAL_LOCK_ONCE: libc::pthread_once_t = libc::PTHREAD_ONCE_INIT;
+static mut CRITICAL_LOCK_PTR: *const PosixMutex = core::ptr::null();
 
-    LOCK.get_or_init(|| {
+extern "C" fn init_critical_lock() {
+    let lock = Box::new(
         PosixMutex::new(PTHREAD_MUTEX_RECURSIVE)
-            .expect("failed to initialize POSIX critical-section mutex")
-    })
+            .expect("failed to initialize POSIX critical-section mutex"),
+    );
+    unsafe {
+        CRITICAL_LOCK_PTR = Box::into_raw(lock);
+    }
 }
 
-thread_local! {
-    static CRITICAL_DEPTH: RefCell<usize> = RefCell::new(0);
+fn global_critical_lock() -> &'static PosixMutex {
+    unsafe {
+        libc::pthread_once(&raw mut CRITICAL_LOCK_ONCE, Some(init_critical_lock));
+        &*CRITICAL_LOCK_PTR
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-thread critical-section depth (pthread TLS)
+// ---------------------------------------------------------------------------
+
+/// pthread TLS key with destructor — avoids per-thread `Box<usize>` leak.
+///
+/// # Safety
+///
+/// Key creation (`pthread_key_create`) is guarded by `pthread_once`.
+/// The destructor frees the heap-allocated `usize` when a thread exits.
+static mut CRITICAL_DEPTH_KEY: libc::pthread_key_t = 0;
+static mut CRITICAL_DEPTH_KEY_ONCE: libc::pthread_once_t = libc::PTHREAD_ONCE_INIT;
+
+extern "C" fn drop_critical_depth(ptr: *mut c_void) {
+    if !ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(ptr as *mut usize));
+        }
+    }
+}
+
+extern "C" fn init_critical_depth_key() {
+    unsafe {
+        let rc = libc::pthread_key_create(&raw mut CRITICAL_DEPTH_KEY, Some(drop_critical_depth));
+        assert_eq!(rc, 0, "failed to create POSIX critical depth TLS key");
+    }
+}
+
+/// Returns a pointer to the calling thread's critical-section nesting depth.
+///
+/// On first access for a given thread the value is heap-allocated and
+/// initialised to 0.
+fn critical_depth_ptr() -> *mut usize {
+    unsafe {
+        libc::pthread_once(&raw mut CRITICAL_DEPTH_KEY_ONCE, Some(init_critical_depth_key));
+
+        let ptr = libc::pthread_getspecific(CRITICAL_DEPTH_KEY) as *mut usize;
+        if !ptr.is_null() {
+            return ptr;
+        }
+
+        let boxed = Box::new(0usize);
+        let raw = Box::into_raw(boxed);
+        let rc = libc::pthread_setspecific(CRITICAL_DEPTH_KEY, raw as *mut c_void);
+        if rc != 0 {
+            drop(Box::from_raw(raw));
+            panic!("failed to set POSIX critical depth TLS");
+        }
+        raw
+    }
 }
 
 fn enter_global_critical() -> UBaseType {
-    CRITICAL_DEPTH.with(|depth_cell| {
-        let mut depth = depth_cell.borrow_mut();
+    let depth = critical_depth_ptr();
+    unsafe {
         let previous_depth = *depth;
 
         if previous_depth == 0 {
@@ -124,13 +208,12 @@ fn enter_global_critical() -> UBaseType {
             .expect("POSIX critical-section nesting depth overflow");
 
         previous_depth as UBaseType
-    })
+    }
 }
 
 fn exit_global_critical() {
-    CRITICAL_DEPTH.with(|depth_cell| {
-        let mut depth = depth_cell.borrow_mut();
-
+    let depth = critical_depth_ptr();
+    unsafe {
         if *depth == 0 {
             debug_assert!(
                 false,
@@ -145,7 +228,7 @@ fn exit_global_critical() {
             let unlocked = global_critical_lock().unlock();
             assert!(unlocked, "failed to unlock POSIX critical-section mutex");
         }
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
