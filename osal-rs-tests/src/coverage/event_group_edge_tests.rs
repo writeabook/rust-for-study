@@ -6,8 +6,8 @@
 //!
 //! ISR-path tests live in backend-specific port smoke tests, not here.
 
-use osal_rs::os::*;
 use osal_rs::os::types::TickType;
+use osal_rs::os::*;
 use osal_rs::utils::Result;
 
 pub fn run_all_tests() -> Result<()> {

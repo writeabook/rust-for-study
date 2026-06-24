@@ -6,8 +6,8 @@
 
 use core::time::Duration;
 
-use osal_rs::os::*;
 use osal_rs::os::types::TickType;
+use osal_rs::os::*;
 use osal_rs::utils::{OsalRsBool, Result};
 
 pub fn run_all_tests() -> Result<()> {

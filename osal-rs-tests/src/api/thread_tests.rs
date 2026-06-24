@@ -250,9 +250,21 @@ pub fn test_multiple_threads_can_run_concurrently() -> Result<()> {
     let mut t2 = Thread::new("mt_t2", 4096, 1);
     let mut t3 = Thread::new("mt_t3", 4096, 1);
 
-    t1.spawn_simple(move || for _ in 0..20 { *c1.lock().unwrap() += 1; })?;
-    t2.spawn_simple(move || for _ in 0..20 { *c2.lock().unwrap() += 1; })?;
-    t3.spawn_simple(move || for _ in 0..20 { *c3.lock().unwrap() += 1; })?;
+    t1.spawn_simple(move || {
+        for _ in 0..20 {
+            *c1.lock().unwrap() += 1;
+        }
+    })?;
+    t2.spawn_simple(move || {
+        for _ in 0..20 {
+            *c2.lock().unwrap() += 1;
+        }
+    })?;
+    t3.spawn_simple(move || {
+        for _ in 0..20 {
+            *c3.lock().unwrap() += 1;
+        }
+    })?;
 
     System::delay(30);
     assert_eq!(*counter.lock().unwrap(), 60);
