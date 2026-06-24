@@ -13,9 +13,10 @@ Public OSAL API contract tests. These tests define behavior that every supported
 backend must satisfy. They are backend-agnostic — they only use `osal_rs::os::*`
 and never reference backend-internal types.
 
-```bash
-cargo test -p osal-rs-tests --no-default-features --features posix
-```
+API contract tests must cover not only sequential API calls, but also core OSAL
+concurrency semantics such as blocking, wakeup, timeout, cross-thread signaling,
+and race-sensitive behavior. Tests in this layer use the OSAL Thread API for
+concurrency, not `std::thread::spawn`, so they remain portable to FreeRTOS.
 
 ### `unit/`
 
@@ -25,14 +26,18 @@ error handling — white-box tests for library internals.
 ### `coverage/`
 
 Boundary, error-path, and defensive tests. Invalid parameters, timeout edge
-cases, zero/max duration, empty names, queue full/empty, and API surface
-completeness checks.
+cases, zero/max duration, empty names, queue full/empty, resource lifecycle,
+handle identity, and API surface completeness checks. Covers what `api/`
+success-path tests do not.
 
 ### `port/`
 
 Minimal port bring-up and smoke tests. These verify that a specific backend
-can be built and minimally exercised. Port tests must **not** duplicate full
-API contract tests.
+can be built and minimally exercised — create/use/destroy for each primitive.
+
+**`port/` must not become a second API test suite.** It should only contain
+minimal bring-up, smoke tests, and documented port limitations. Full API
+contract tests live in `api/` and are exercised by every backend runner.
 
 ### `common/`
 
@@ -45,7 +50,7 @@ This directory must not contain `#[test]` functions or backend-specific logic.
 |---|---|---|
 | `posix` | Primary host backend | Supports Linux, macOS, and other POSIX-like systems. Default. |
 | `freertos` | Primary embedded RTOS backend | Requires target runner / hardware / QEMU for execution. |
-| `linux` | Transitional / legacy | Pure Rust reference implementation. May be removed after POSIX fully covers host functionality. |
+| `linux` | Transitional / legacy | Pure Rust reference implementation. The legacy `linux` backend is transitional and should not be expanded. Linux-specific tests should not grow unless they verify a legacy implementation detail that cannot be expressed through the portable OSAL API. May be removed after POSIX fully covers host functionality. |
 
 ## Running Tests
 
@@ -72,12 +77,21 @@ cargo check -p osal-rs-tests --no-default-features --features freertos
 
 ```
 src/
-  api/         OSAL API contract tests
+  api/         OSAL API contract tests (sequential + concurrency)
   unit/        Internal utility tests
-  coverage/    Boundary and error-path tests
-  port/        Backend smoke / bring-up tests
+  coverage/    Boundary, error-path, lifecycle, and timeout tests
+  port/        Backend smoke / bring-up tests (minimal only)
   common/      Shared test helpers
-  linux/       Linux legacy runner (common test entry points)
-  posix/       POSIX runner (common test entry points)
+  linux/       Linux legacy runner (individual #[test] per API test)
+  posix/       POSIX runner (individual #[test] per API test)
   freertos/    FreeRTOS runner (manual run_all_tests entry point)
 ```
+
+## Host Runner Granularity
+
+POSIX and Linux host runners expose each API test function as an individual
+`#[test]`. This ensures `cargo test` output names the exact test case on
+failure rather than an aggregate `run_all_tests` runner.
+
+FreeRTOS retains `run_all_tests()` as the manual aggregation entry point for
+use from embedded firmware tasks.
