@@ -285,10 +285,7 @@ extern "C" fn init_current_thread_key() {
 
 fn current_thread_key() -> libc::pthread_key_t {
     unsafe {
-        libc::pthread_once(
-            &raw mut CURRENT_THREAD_KEY_ONCE,
-            init_current_thread_key,
-        );
+        libc::pthread_once(&raw mut CURRENT_THREAD_KEY_ONCE, init_current_thread_key);
         CURRENT_THREAD_KEY
     }
 }

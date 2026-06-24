@@ -143,16 +143,24 @@
 //! - [`log`] - Logging macros
 //! - `traits` - Private module defining the trait abstractions
 //! - `freertos` - Private FreeRTOS implementation (enabled with `freertos` feature)
-//! - `posix` - Private POSIX implementation (enabled with `posix` feature)
-//! - `linux` - Private Linux reference implementation (enabled with `linux` feature)
+//! - `posix` - Private POSIX implementation — no_std + alloc + libc (enabled with `posix` feature)
+//! - `linux` - Private Linux reference implementation — std-based (enabled with `linux` feature)
 //!
 //! ## Features
 //!
-//! - `freertos` - Enable FreeRTOS support (default)
-//! - `posix` - Enable POSIX support with native pthread primitives
-//! - `linux` - Enable Linux host reference backend
-//! - `std` - Enable standard library support for testing
-//! - `disable_panic` - Disable the default panic handler and allocator
+//! | Feature     | Description                                          | std?   |
+//! |-------------|------------------------------------------------------|--------|
+//! | `freertos`  | FreeRTOS backend (default)                           | no_std |
+//! | `posix`     | POSIX pthread/libc backend                           | no_std |
+//! | `linux`     | Linux std-based reference backend                    | std    |
+//! | `std`       | Enable std support (required by `linux`)             | —      |
+//! | `disable_panic` | Disable built-in panic handler and allocator      | —      |
+//!
+//! The `posix` backend uses `no_std` + `alloc` + `libc`.  It does **not**
+//! require `std`.  Global initialisation uses `pthread_once_t`, per-thread
+//! state uses `pthread_key_t` TLS, and the default allocator delegates to
+//! `libc::malloc` / `libc::free`.  A `std`-enabled test harness (such as
+//! `osal-rs-tests`) enables `osal-rs/std` to use the standard test runner.
 //!
 //! ## Requirements
 //!
