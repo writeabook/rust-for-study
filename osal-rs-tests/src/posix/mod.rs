@@ -253,38 +253,46 @@ fn thread_multiple_concurrent() {
 // ---------------------------------------------------------------------------
 // Timer
 // ---------------------------------------------------------------------------
+// Timer API tests are intentionally executed as a single contract suite on host
+// runners because POSIX/Linux timer backends share a process-wide timer manager
+// and worker thread. Running individual timer tests in parallel can introduce
+// cross-test interference unrelated to the OSAL timer contract.
 #[test]
-fn timer_creation() {
-    crate::api::timer_tests::test_timer_creation().unwrap();
+fn timer_api_contract() {
+    crate::api::timer_tests::run_all_tests().unwrap();
 }
-#[test]
-fn timer_one_shot() {
-    crate::api::timer_tests::test_timer_one_shot().unwrap();
-}
-#[test]
-fn timer_auto_reload() {
-    crate::api::timer_tests::test_timer_auto_reload().unwrap();
-}
-#[test]
-fn timer_start_stop() {
-    crate::api::timer_tests::test_timer_start_stop().unwrap();
-}
-#[test]
-fn timer_reset() {
-    crate::api::timer_tests::test_timer_reset().unwrap();
-}
-#[test]
-fn timer_change_period() {
-    crate::api::timer_tests::test_timer_change_period().unwrap();
-}
-#[test]
-fn timer_with_param() {
-    crate::api::timer_tests::test_timer_with_param().unwrap();
-}
-#[test]
-fn timer_delete() {
-    crate::api::timer_tests::test_timer_delete().unwrap();
-}
+// #[test]
+// fn timer_creation() {
+//     crate::api::timer_tests::test_timer_creation().unwrap();
+// }
+// #[test]
+// fn timer_one_shot() {
+//     crate::api::timer_tests::test_timer_one_shot().unwrap();
+// }
+// #[test]
+// fn timer_auto_reload() {
+//     crate::api::timer_tests::test_timer_auto_reload().unwrap();
+// }
+// #[test]
+// fn timer_start_stop() {
+//     crate::api::timer_tests::test_timer_start_stop().unwrap();
+// }
+// #[test]
+// fn timer_reset() {
+//     crate::api::timer_tests::test_timer_reset().unwrap();
+// }
+// #[test]
+// fn timer_change_period() {
+//     crate::api::timer_tests::test_timer_change_period().unwrap();
+// }
+// #[test]
+// fn timer_with_param() {
+//     crate::api::timer_tests::test_timer_with_param().unwrap();
+// }
+// #[test]
+// fn timer_delete() {
+//     crate::api::timer_tests::test_timer_delete().unwrap();
+// }
 
 // ---------------------------------------------------------------------------
 // API surface (compile-time check)
