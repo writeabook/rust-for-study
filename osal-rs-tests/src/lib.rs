@@ -38,6 +38,9 @@ mod coverage;
 #[cfg(test)]
 mod port;
 
+#[cfg(feature = "linux")]
+pub mod legacy;
+
 #[cfg(feature = "freertos")]
 pub mod freertos;
 

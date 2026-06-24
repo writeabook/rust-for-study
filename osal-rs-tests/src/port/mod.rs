@@ -7,9 +7,6 @@
 #[cfg(feature = "linux")]
 mod linux_legacy_smoke_tests;
 
-#[cfg(feature = "linux")]
-mod linux_legacy_extended_tests;
-
 #[cfg(feature = "posix")]
 mod posix_smoke_tests;
 

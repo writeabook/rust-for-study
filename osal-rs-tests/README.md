@@ -39,6 +39,14 @@ can be built and minimally exercised — create/use/destroy for each primitive.
 minimal bring-up, smoke tests, and documented port limitations. Full API
 contract tests live in `api/` and are exercised by every backend runner.
 
+### `legacy/`
+
+Linux-backend-specific regression tests (ISR host simulation, poison
+recovery, QueueStreamed, cooperative cancellation, etc.).  These are
+**not** portable OSAL API contract tests.  The Linux backend is
+transitional and may be removed after POSIX fully covers host
+functionality.  This directory should not be expanded.
+
 ### `common/`
 
 Shared test helpers only. Timeout constants, assertion macros, test scaffolding.
@@ -50,7 +58,12 @@ This directory must not contain `#[test]` functions or backend-specific logic.
 |---|---|---|
 | `posix` | Primary host backend | Supports Linux, macOS, and other POSIX-like systems. Default. |
 | `freertos` | Primary embedded RTOS backend | Requires target runner / hardware / QEMU for execution. |
-| `linux` | Transitional / legacy | Pure Rust reference implementation. The legacy `linux` backend is transitional and should not be expanded. Linux-specific tests should not grow unless they verify a legacy implementation detail that cannot be expressed through the portable OSAL API. May be removed after POSIX fully covers host functionality. |
+| `linux` | Transitional / legacy | Pure Rust reference implementation. Legacy tests live in `crate::legacy`. |
+
+Linux-specific tests should not grow unless they verify a legacy
+implementation detail that cannot be expressed through the portable
+OSAL API. The Linux backend may be removed after POSIX fully covers
+host functionality.
 
 ## Running Tests
 
@@ -81,6 +94,7 @@ src/
   unit/        Internal utility tests
   coverage/    Boundary, error-path, lifecycle, and timeout tests
   port/        Backend smoke / bring-up tests (minimal only)
+  legacy/      Linux-only regression tests (transitional)
   common/      Shared test helpers
   linux/       Linux legacy runner (individual #[test] per API test)
   posix/       POSIX runner (individual #[test] per API test)
