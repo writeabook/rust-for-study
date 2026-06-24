@@ -250,23 +250,38 @@ pub fn test_multiple_threads_can_run_concurrently() -> Result<()> {
     let mut t2 = Thread::new("mt_t2", 4096, 1);
     let mut t3 = Thread::new("mt_t3", 4096, 1);
 
+    let done = alloc::sync::Arc::new(Mutex::new(0u32));
+    let d1 = done.clone();
+    let d2 = done.clone();
+    let d3 = done.clone();
+
     t1.spawn_simple(move || {
         for _ in 0..20 {
             *c1.lock().unwrap() += 1;
         }
+        *d1.lock().unwrap() += 1;
     })?;
     t2.spawn_simple(move || {
         for _ in 0..20 {
             *c2.lock().unwrap() += 1;
         }
+        *d2.lock().unwrap() += 1;
     })?;
     t3.spawn_simple(move || {
         for _ in 0..20 {
             *c3.lock().unwrap() += 1;
         }
+        *d3.lock().unwrap() += 1;
     })?;
 
-    System::delay(30);
+    // Poll-wait for all 3 threads to signal completion (bounded).
+    for _ in 0..200 {
+        System::delay(1);
+        if *done.lock().unwrap() == 3 {
+            break;
+        }
+    }
+    assert_eq!(*done.lock().unwrap(), 3);
     assert_eq!(*counter.lock().unwrap(), 60);
     Ok(())
 }

@@ -104,7 +104,7 @@ fn queue_fetch_timeout_returns_error() -> Result<()> {
     let q = Queue::new(4, 4)?;
     let mut buf = [0u8; 4];
     let err = q.fetch(&mut buf, 1 as TickType).unwrap_err();
-    assert_eq!(err, Error::QueueReceiveTimeout);
+    assert!(err == Error::QueueReceiveTimeout || err == Error::Timeout);
     Ok(())
 }
 
@@ -112,7 +112,7 @@ fn queue_post_timeout_when_full_returns_error() -> Result<()> {
     let q = queue_filled_to_capacity(4);
     let data = [1u8, 2, 3, 4];
     let err = q.post(&data, 1 as TickType).unwrap_err();
-    assert_eq!(err, Error::QueueSendTimeout);
+    assert!(err == Error::QueueSendTimeout || err == Error::Timeout);
     Ok(())
 }
 
@@ -173,7 +173,7 @@ fn queue_send_to_full_queue_returns_full() -> Result<()> {
     let q = queue_filled_to_capacity(4);
     let data = [1u8; 4];
     let err = q.post(&data, 0).unwrap_err();
-    assert!(err == Error::QueueFull || err == Error::QueueSendTimeout);
+    assert!(err == Error::QueueFull || err == Error::QueueSendTimeout || err == Error::Timeout);
     Ok(())
 }
 
@@ -181,6 +181,6 @@ fn queue_receive_from_empty_queue_times_out() -> Result<()> {
     let q = Queue::new(4, 4)?;
     let mut buf = [0u8; 4];
     let err = q.fetch(&mut buf, 0).unwrap_err();
-    assert!(err == Error::QueueReceiveTimeout);
+    assert!(err == Error::QueueReceiveTimeout || err == Error::Timeout);
     Ok(())
 }

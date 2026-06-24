@@ -230,28 +230,38 @@ pub fn test_mutex_provides_mutual_exclusion_across_threads() -> Result<()> {
     let counter = alloc::sync::Arc::new(Mutex::new(0u32));
     let c1 = counter.clone();
     let c2 = counter.clone();
+    let done1 = alloc::sync::Arc::new(Mutex::new(false));
+    let d1 = done1.clone();
+    let done2 = alloc::sync::Arc::new(Mutex::new(false));
+    let d2 = done2.clone();
 
     let mut t1 = Thread::new("mux_t1", 4096, 1);
     let mut t2 = Thread::new("mux_t2", 4096, 1);
 
     let n = 100u32;
-    let n1 = n;
-    let n2 = n;
-
     t1.spawn_simple(move || {
-        for _ in 0..n1 {
+        for _ in 0..n {
             *c1.lock().unwrap() += 1;
         }
+        *d1.lock().unwrap() = true;
     })?;
 
     t2.spawn_simple(move || {
-        for _ in 0..n2 {
+        for _ in 0..n {
             *c2.lock().unwrap() += 1;
         }
+        *d2.lock().unwrap() = true;
     })?;
 
-    // Wait for threads to finish.
-    System::delay(50);
+    // Poll-wait for both threads to signal completion (bounded).
+    for _ in 0..200 {
+        System::delay(1);
+        if *done1.lock().unwrap() && *done2.lock().unwrap() {
+            break;
+        }
+    }
+    assert!(*done1.lock().unwrap());
+    assert!(*done2.lock().unwrap());
     assert_eq!(*counter.lock().unwrap(), n * 2);
     Ok(())
 }

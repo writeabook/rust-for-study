@@ -290,6 +290,30 @@ fn timer_delete() {
 // ---------------------------------------------------------------------------
 // API surface (compile-time check)
 // ---------------------------------------------------------------------------
+// Coverage — boundary / edge-case / lifecycle tests
+// ---------------------------------------------------------------------------
+#[test]
+fn coverage_event_group_edges() {
+    crate::coverage::event_group_edge_tests::run_all_tests().unwrap();
+}
+#[test]
+fn coverage_queue_edges() {
+    crate::coverage::queue_edge_tests::run_all_tests().unwrap();
+}
+#[test]
+fn coverage_resource_lifecycle() {
+    crate::coverage::resource_lifecycle_tests::run_all_tests().unwrap();
+}
+#[test]
+fn coverage_semaphore_edges() {
+    crate::coverage::semaphore_edge_tests::run_all_tests().unwrap();
+}
+#[test]
+fn coverage_timeout_edges() {
+    crate::coverage::timeout_edge_tests::run_all_tests().unwrap();
+}
+
+// ---------------------------------------------------------------------------
 #[test]
 fn api_surface() {
     crate::api::api_surface::run_all_tests().unwrap();
