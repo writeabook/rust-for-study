@@ -1,3 +1,12 @@
+//! Linux backend test runner.
+//!
+//! Each `#[test]` function executes a shared OSAL contract test suite
+//! from `crate::api` against the Linux reference backend.
+//!
+//! Linux-backend-specific smoke tests (handle uniqueness, poison
+//! recovery, ISR emulation, etc.) live in
+//! `crate::port::linux_legacy_smoke_tests`.
+
 #[test]
 fn test_run_all_tests_duration() {
     crate::api::duration_tests::run_all_tests().unwrap();
@@ -11,13 +20,6 @@ fn test_run_all_tests_system() {
 #[test]
 fn test_run_all_tests_mutex_common() {
     crate::api::mutex_tests::run_all_tests().unwrap();
-}
-
-mod mutex_tests;
-
-#[test]
-fn test_run_all_tests_mutex_linux() {
-    crate::linux::mutex_tests::run_all_tests().unwrap();
 }
 
 #[test]
@@ -35,20 +37,6 @@ fn test_run_all_tests_queue_common() {
     crate::api::queue_tests::run_all_tests().unwrap();
 }
 
-mod event_group_tests;
-
-#[test]
-fn test_run_all_tests_event_group_linux() {
-    crate::linux::event_group_tests::run_all_tests().unwrap();
-}
-
-mod queue_tests;
-
-#[test]
-fn test_run_all_tests_queue_linux() {
-    crate::linux::queue_tests::run_all_tests().unwrap();
-}
-
 #[test]
 fn test_run_all_tests_thread() {
     crate::api::thread_tests::run_all_tests().unwrap();
@@ -57,34 +45,6 @@ fn test_run_all_tests_thread() {
 #[test]
 fn test_run_all_tests_timer_common() {
     crate::api::timer_tests::run_all_tests().unwrap();
-}
-
-mod timer_tests;
-
-#[test]
-fn test_run_all_tests_timer_linux() {
-    crate::linux::timer_tests::run_all_tests().unwrap();
-}
-
-mod semaphore_tests;
-
-#[test]
-fn test_run_all_tests_semaphore_linux() {
-    crate::linux::semaphore_tests::run_all_tests().unwrap();
-}
-
-mod thread_tests;
-
-#[test]
-fn test_run_all_tests_thread_linux() {
-    crate::linux::thread_tests::run_all_tests().unwrap();
-}
-
-mod system_tests;
-
-#[test]
-fn test_run_all_tests_system_linux() {
-    crate::linux::system_tests::run_all_tests().unwrap();
 }
 
 #[test]
