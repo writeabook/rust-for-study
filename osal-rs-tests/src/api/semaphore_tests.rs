@@ -151,6 +151,61 @@ pub fn test_semaphore_drop() -> Result<()> {
     Ok(())
 }
 
+// --- concurrency ---
+
+pub fn test_semaphore_wait_blocks_until_signal() -> Result<()> {
+    let sem = alloc::sync::Arc::new(Semaphore::new(1, 0)?);
+    let s = sem.clone();
+    let done = alloc::sync::Arc::new(Mutex::new(false));
+    let d = done.clone();
+
+    let mut t = Thread::new("sem_wait", 4096, 1);
+    t.spawn_simple(move || {
+        assert_eq!(s.wait(core::time::Duration::from_secs(5)), OsalRsBool::True);
+        *d.lock().unwrap() = true;
+    })?;
+
+    System::delay(10);
+    assert_eq!(sem.signal(), OsalRsBool::True);
+    // Give the waiter time to wake and set done.
+    for _ in 0..50 {
+        System::delay(1);
+        if *done.lock().unwrap() {
+            break;
+        }
+    }
+    assert!(*done.lock().unwrap());
+    Ok(())
+}
+
+pub fn test_semaphore_no_lost_wakeup_under_race() -> Result<()> {
+    for _ in 0..20 {
+        let sem = alloc::sync::Arc::new(Semaphore::new(1, 0)?);
+        let s = sem.clone();
+        let done = alloc::sync::Arc::new(Mutex::new(false));
+        let d = done.clone();
+
+        let mut t = Thread::new("sem_race", 4096, 1);
+        t.spawn_simple(move || {
+            // Short wait — signal should arrive.
+            let _ = s.wait(core::time::Duration::from_secs(2));
+            *d.lock().unwrap() = true;
+        })?;
+
+        // Small sleep to vary the race window.
+        System::delay(1);
+        let _ = sem.signal();
+        for _ in 0..100 {
+            System::delay(1);
+            if *done.lock().unwrap() {
+                break;
+            }
+        }
+        assert!(*done.lock().unwrap());
+    }
+    Ok(())
+}
+
 pub fn run_all_tests() -> Result<()> {
     log_info!(TAG, "========== Running Semaphore Tests ==========");
     test_semaphore_creation()?;
@@ -162,6 +217,8 @@ pub fn run_all_tests() -> Result<()> {
     test_semaphore_initial_count()?;
     test_semaphore_binary()?;
     test_semaphore_drop()?;
+    test_semaphore_wait_blocks_until_signal()?;
+    test_semaphore_no_lost_wakeup_under_race()?;
     log_info!(TAG, "========== All Semaphore Tests PASSED ==========");
     Ok(())
 }

@@ -145,15 +145,56 @@ pub fn test_queue_drop() -> Result<()> {
     Ok(())
 }
 
+// --- concurrency ---
+
+pub fn test_queue_receive_blocks_until_send() -> Result<()> {
+    let q = alloc::sync::Arc::new(Queue::new(4, 4)?);
+    let q2 = q.clone();
+    let done = alloc::sync::Arc::new(Mutex::new(false));
+    let d = done.clone();
+
+    let mut t = Thread::new("q_recv", 4096, 1);
+    t.spawn_simple(move || {
+        let mut buf = [0u8; 4];
+        q2.fetch(&mut buf, types::TickType::MAX).unwrap();
+        assert_eq!(buf, [0xAA, 0xBB, 0xCC, 0xDD]);
+        *d.lock().unwrap() = true;
+    })?;
+
+    System::delay(10);
+    q.post(&[0xAA, 0xBB, 0xCC, 0xDD], 0).unwrap();
+    for _ in 0..50 {
+        System::delay(1);
+        if *done.lock().unwrap() {
+            break;
+        }
+    }
+    assert!(*done.lock().unwrap());
+    Ok(())
+}
+
+pub fn test_queue_preserves_fifo_order() -> Result<()> {
+    let q = Queue::new(10, 4)?;
+    for i in 0u8..5 {
+        q.post(&[i, i, i, i], 0)?;
+    }
+    for i in 0u8..5 {
+        let mut buf = [0u8; 4];
+        q.fetch(&mut buf, 0)?;
+        assert_eq!(buf[0], i);
+    }
+    Ok(())
+}
+
 pub fn run_all_tests() -> Result<()> {
     log_info!(TAG, "========== Running Queue Tests ==========");
     test_queue_creation()?;
     test_queue_post_fetch()?;
     test_queue_timeout()?;
     test_queue_multiple_items()?;
-    // test_queue_streamed()?;  // Commented - requires types with ToBytes/FromBytes traits
-    // test_queue_streamed_multiple()?;  // Commented - requires types with ToBytes/FromBytes traits
     test_queue_drop()?;
+    test_queue_receive_blocks_until_send()?;
+    test_queue_preserves_fifo_order()?;
     log_info!(TAG, "========== All Queue Tests PASSED ==========");
     Ok(())
 }

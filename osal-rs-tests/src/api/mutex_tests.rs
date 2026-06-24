@@ -224,6 +224,38 @@ pub fn test_mutex_drop() -> Result<()> {
     Ok(())
 }
 
+// --- concurrency ---
+
+pub fn test_mutex_provides_mutual_exclusion_across_threads() -> Result<()> {
+    let counter = alloc::sync::Arc::new(Mutex::new(0u32));
+    let c1 = counter.clone();
+    let c2 = counter.clone();
+
+    let mut t1 = Thread::new("mux_t1", 4096, 1);
+    let mut t2 = Thread::new("mux_t2", 4096, 1);
+
+    let n = 100u32;
+    let n1 = n;
+    let n2 = n;
+
+    t1.spawn_simple(move || {
+        for _ in 0..n1 {
+            *c1.lock().unwrap() += 1;
+        }
+    })?;
+
+    t2.spawn_simple(move || {
+        for _ in 0..n2 {
+            *c2.lock().unwrap() += 1;
+        }
+    })?;
+
+    // Wait for threads to finish.
+    System::delay(50);
+    assert_eq!(*counter.lock().unwrap(), n * 2);
+    Ok(())
+}
+
 pub fn run_all_tests() -> Result<()> {
     log_info!(TAG, "========== Running Mutex Tests ==========");
     test_mutex_creation()?;
@@ -235,6 +267,7 @@ pub fn run_all_tests() -> Result<()> {
     test_mutex_non_recursive()?;
     test_raw_mutex_recursive()?;
     test_mutex_drop()?;
+    test_mutex_provides_mutual_exclusion_across_threads()?;
     log_info!(TAG, "========== All Mutex Tests PASSED ==========");
     Ok(())
 }

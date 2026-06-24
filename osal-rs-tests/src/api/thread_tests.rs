@@ -235,6 +235,26 @@ pub fn run_all_tests() -> Result<()> {
     test_thread_get_current()?;
     test_thread_spawn_simple()?;
     test_thread_spawn_simple_with_shared_data()?;
+    test_multiple_threads_can_run_concurrently()?;
     log_info!(TAG, "========== All Thread Tests PASSED ==========");
+    Ok(())
+}
+
+pub fn test_multiple_threads_can_run_concurrently() -> Result<()> {
+    let counter = alloc::sync::Arc::new(Mutex::new(0u32));
+    let c1 = counter.clone();
+    let c2 = counter.clone();
+    let c3 = counter.clone();
+
+    let mut t1 = Thread::new("mt_t1", 4096, 1);
+    let mut t2 = Thread::new("mt_t2", 4096, 1);
+    let mut t3 = Thread::new("mt_t3", 4096, 1);
+
+    t1.spawn_simple(move || for _ in 0..20 { *c1.lock().unwrap() += 1; })?;
+    t2.spawn_simple(move || for _ in 0..20 { *c2.lock().unwrap() += 1; })?;
+    t3.spawn_simple(move || for _ in 0..20 { *c3.lock().unwrap() += 1; })?;
+
+    System::delay(30);
+    assert_eq!(*counter.lock().unwrap(), 60);
     Ok(())
 }

@@ -189,6 +189,61 @@ pub fn test_event_group_drop() -> Result<()> {
     Ok(())
 }
 
+
+// --- concurrency ---
+
+pub fn test_event_group_wait_any_unblocks_after_set() -> Result<()> {
+    let eg = alloc::sync::Arc::new(EventGroup::new()?);
+    let e = eg.clone();
+    let done = alloc::sync::Arc::new(Mutex::new(false));
+    let d = done.clone();
+    let mut t = Thread::new("eg_wait", 4096, 1);
+    t.spawn_simple(move || {
+        let bits = e.wait(0b0001, types::TickType::MAX);
+        assert_ne!(bits & 0b0001, 0);
+        *d.lock().unwrap() = true;
+    })?;
+    System::delay(10);
+    eg.set(0b0001);
+    for _ in 0..50 {
+        System::delay(1);
+        if *done.lock().unwrap() { break; }
+    }
+    assert!(*done.lock().unwrap());
+    Ok(())
+}
+
+pub fn test_event_group_clear_bits_affects_future_waits() -> Result<()> {
+    let eg = EventGroup::new()?;
+    eg.set(0b0001);
+    eg.clear(0b0001);
+    let result = eg.wait(0b0001, 0);
+    assert_eq!(result & 0b0001, 0);
+    Ok(())
+}
+
+pub fn test_event_group_no_lost_set_under_race() -> Result<()> {
+    for _ in 0..20 {
+        let eg = alloc::sync::Arc::new(EventGroup::new()?);
+        let e = eg.clone();
+        let done = alloc::sync::Arc::new(Mutex::new(false));
+        let d = done.clone();
+        let mut t = Thread::new("eg_race", 4096, 1);
+        t.spawn_simple(move || {
+            let bits = e.wait(0b0001, core::time::Duration::from_secs(2).to_ticks());
+            if bits & 0b0001 != 0 { *d.lock().unwrap() = true; }
+        })?;
+        System::delay(1);
+        eg.set(0b0001);
+        for _ in 0..100 {
+            System::delay(1);
+            if *done.lock().unwrap() { break; }
+        }
+        assert!(*done.lock().unwrap());
+    }
+    Ok(())
+}
+
 pub fn run_all_tests() -> Result<()> {
     log_info!(TAG, "========== Running EventGroup Tests ==========");
     test_event_group_creation()?;
@@ -202,6 +257,9 @@ pub fn run_all_tests() -> Result<()> {
     test_event_group_sequential_operations()?;
     test_event_group_all_bits()?;
     test_event_group_drop()?;
+    test_event_group_wait_any_unblocks_after_set()?;
+    test_event_group_clear_bits_affects_future_waits()?;
+    test_event_group_no_lost_set_under_race()?;
     log_info!(TAG, "========== All EventGroup Tests PASSED ==========");
     Ok(())
 }
