@@ -6,12 +6,14 @@
 //!
 //! # Design
 //!
-//! - **Startup anchor**: A [`OnceLock<u64>`] captures the monotonic clock on
-//!   first access so all tick / duration values are relative to process start.
+//! - **Startup anchor**: A `pthread_once_t` + `static mut u64` captures the
+//!   monotonic clock on first access so all tick / duration values are
+//!   relative to process start.
 //! - **Delays**: [`libc::nanosleep`] with signal-interruption restart.
 //! - **Critical sections**: `PosixMutex` (`PTHREAD_MUTEX_RECURSIVE`) with
-//!   per-thread nesting depth — simulates mutual exclusion among OSAL callers
-//!   but does NOT disable OS scheduling or hardware interrupts.
+//!   per-thread `pthread_key_t` TLS nesting depth — simulates mutual
+//!   exclusion among OSAL callers but does NOT disable OS scheduling or
+//!   hardware interrupts.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
