@@ -371,6 +371,19 @@ pub mod os {
     #[global_allocator]
     pub static ALLOCATOR: Allocator = Allocator;
 
+    #[cfg(all(not(feature = "disable_panic"), feature = "posix"))]
+    use crate::osal::allocator::PosixAllocator;
+
+    /// Global allocator using the POSIX libc heap.
+    ///
+    /// Delegates to `libc::malloc` / `libc::free` / `libc::realloc`.
+    /// Active when the `posix` feature is enabled and `disable_panic`
+    /// is **not** set.  A `std`-enabled binary (e.g. `osal-rs-tests`)
+    /// overrides this with its own allocator.
+    #[cfg(all(not(feature = "disable_panic"), feature = "posix"))]
+    #[global_allocator]
+    pub static POSIX_ALLOCATOR: PosixAllocator = PosixAllocator;
+
     /// Event group synchronization primitives.
     #[allow(unused_imports)]
     pub use crate::osal::event_group::*;
@@ -429,12 +442,12 @@ pub mod os {
     pub use crate::traits::*;
 }
 
-/// Default panic handler for `no_std` FreeRTOS environments.
+/// Default panic handler for `no_std` backends (FreeRTOS / POSIX).
 ///
-/// This panic handler is **only** active when the `freertos` feature is enabled
-/// and `disable_panic` is **not** enabled.  POSIX and Linux backends rely on
-/// the host / test harness panic handler (or the final application binary)
-/// instead.
+/// This panic handler is active when a `no_std` backend (`freertos` or
+/// `posix`) is enabled and `disable_panic` is **not** enabled.
+///
+/// The `linux` backend uses `std` and does **not** install this handler.
 ///
 /// # Custom Panic Handler
 ///
@@ -446,7 +459,10 @@ pub mod os {
 /// ```
 ///
 /// Then define your own `#[panic_handler]` in your application.
-#[cfg(all(feature = "freertos", not(feature = "disable_panic")))]
+#[cfg(all(
+    not(feature = "disable_panic"),
+    any(feature = "freertos", feature = "posix")
+))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     #[allow(clippy::empty_loop)]

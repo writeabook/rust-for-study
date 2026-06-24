@@ -75,6 +75,7 @@
 //! OSAL primitives, while the Linux backend remains a separate pure Rust
 //! reference implementation.
 
+pub(crate) mod allocator;
 pub mod bsp;
 pub mod config;
 pub(crate) mod duration;

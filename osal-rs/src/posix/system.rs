@@ -52,7 +52,7 @@ extern "C" fn init_start_ns() {
 /// OSAL timing function is called.
 fn startup_ns() -> u64 {
     unsafe {
-        libc::pthread_once(&raw mut START_NS_ONCE, Some(init_start_ns));
+        libc::pthread_once(&raw mut START_NS_ONCE, init_start_ns);
         START_NS
     }
 }
@@ -136,7 +136,7 @@ extern "C" fn init_critical_lock() {
 
 fn global_critical_lock() -> &'static PosixMutex {
     unsafe {
-        libc::pthread_once(&raw mut CRITICAL_LOCK_ONCE, Some(init_critical_lock));
+        libc::pthread_once(&raw mut CRITICAL_LOCK_ONCE, init_critical_lock);
         &*CRITICAL_LOCK_PTR
     }
 }
@@ -177,7 +177,7 @@ fn critical_depth_ptr() -> *mut usize {
     unsafe {
         libc::pthread_once(
             &raw mut CRITICAL_DEPTH_KEY_ONCE,
-            Some(init_critical_depth_key),
+            init_critical_depth_key,
         );
 
         let ptr = libc::pthread_getspecific(CRITICAL_DEPTH_KEY) as *mut usize;
@@ -206,7 +206,7 @@ fn enter_global_critical() -> UBaseType {
             assert!(locked, "failed to lock POSIX critical-section mutex");
         }
 
-        *depth = depth
+        *depth = previous_depth
             .checked_add(1)
             .expect("POSIX critical-section nesting depth overflow");
 

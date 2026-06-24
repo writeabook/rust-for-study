@@ -151,7 +151,7 @@ extern "C" fn init_registry() {
 
 fn registry() -> &'static RegistryCell {
     unsafe {
-        libc::pthread_once(&raw mut REGISTRY_ONCE, Some(init_registry));
+        libc::pthread_once(&raw mut REGISTRY_ONCE, init_registry);
         &*REGISTRY_PTR
     }
 }
@@ -287,7 +287,7 @@ fn current_thread_key() -> libc::pthread_key_t {
     unsafe {
         libc::pthread_once(
             &raw mut CURRENT_THREAD_KEY_ONCE,
-            Some(init_current_thread_key),
+            init_current_thread_key,
         );
         CURRENT_THREAD_KEY
     }
@@ -350,7 +350,7 @@ extern "C" fn init_main_thread_core() {
 
 fn main_thread_core() -> Arc<ThreadCore> {
     unsafe {
-        libc::pthread_once(&raw mut MAIN_THREAD_CORE_ONCE, Some(init_main_thread_core));
+        libc::pthread_once(&raw mut MAIN_THREAD_CORE_ONCE, init_main_thread_core);
         (*MAIN_THREAD_CORE_PTR).clone()
     }
 }

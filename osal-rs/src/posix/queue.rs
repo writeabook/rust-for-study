@@ -10,6 +10,7 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 
 use alloc::collections::VecDeque;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use libc::PTHREAD_MUTEX_ERRORCHECK;

@@ -9,11 +9,10 @@
 //!   `CallbackCommand` and are applied after the callback returns.
 //! - Fixed-period auto-reload with catch-up prevention.
 //!
-//! # Migration status (std → no_std)
+//! # Panic policy
 //!
-//! TODO(posix-no-std): `OnceLock` and `catch_unwind` remain as transitional
-//! helpers.  The final POSIX core should migrate to `pthread_once_t` and
-//! `panic=abort`, with collections from `alloc`.
+//! POSIX no_std backend does **not** catch panics in timer callbacks.
+//! Callbacks must not panic; the backend uses `panic=abort` semantics.
 
 use core::cell::UnsafeCell;
 use core::cmp::Ordering;
@@ -24,8 +23,7 @@ use core::ops::Deref;
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::sync::Arc;
-
-use std::sync::OnceLock;
+use alloc::vec::Vec;
 
 use libc::PTHREAD_MUTEX_ERRORCHECK;
 
@@ -125,32 +123,61 @@ struct TimerManager {
 unsafe impl Send for TimerManager {}
 unsafe impl Sync for TimerManager {}
 
-static MGR: OnceLock<TimerManager> = OnceLock::new();
-static WORKER: OnceLock<sys_thread::PosixThread> = OnceLock::new();
+/// pthread_once-based global init for the TimerManager singleton.
+///
+/// Initialisation failure is fatal (`expect` aborts).  The manager is leaked
+/// (process-lifetime), matching OSAL global-singleton semantics.
+///
+/// # Safety
+///
+/// `pthread_once` guarantees exactly-once semantics.  The raw pointer deref
+/// is safe because the pointer is written exactly once before any read.
+static mut MGR_ONCE: libc::pthread_once_t = libc::PTHREAD_ONCE_INIT;
+static mut MGR_PTR: *const TimerManager = core::ptr::null();
 
-// -- manager initialization (split so worker can call mgr_ptr_only safely) --
-
-fn init_manager() -> TimerManager {
-    TimerManager {
+extern "C" fn init_timer_manager() {
+    let mgr = Box::new(TimerManager {
         mtx: PosixMutex::new(PTHREAD_MUTEX_ERRORCHECK).expect("TimerManager: mutex"),
         cond: PosixCondvar::new().expect("TimerManager: cond"),
         timers: UnsafeCell::new(BTreeMap::new()),
         heap: UnsafeCell::new(BinaryHeap::new()),
         next_id: UnsafeCell::new(1),
+    });
+    unsafe {
+        MGR_PTR = Box::into_raw(mgr);
     }
 }
 
 /// Returns a pointer to the global TimerManager, initialising it on first
 /// call.  Does **not** start the worker — safe to call from `worker_loop`.
 fn mgr_ptr_only() -> *const TimerManager {
-    MGR.get_or_init(init_manager) as *const TimerManager
+    unsafe {
+        libc::pthread_once(&raw mut MGR_ONCE, init_timer_manager);
+        MGR_PTR
+    }
+}
+
+/// pthread_once-based init for the timer service worker thread.
+///
+/// `WORKER_ONCE` replaces the old `WORKER: OnceLock<PosixThread>` — its
+/// sole purpose was preventing duplicate `start_worker()` calls.  Since the
+/// worker is detached, we do not store the handle.
+static mut WORKER_ONCE: libc::pthread_once_t = libc::PTHREAD_ONCE_INIT;
+
+extern "C" fn init_timer_worker_only() {
+    let thread = unsafe { sys_thread::create(None, timer_worker_entry, core::ptr::null_mut()) }
+        .expect("TimerManager: pthread_create");
+    let detached = unsafe { sys_thread::detach(thread) };
+    assert!(detached, "TimerManager: pthread_detach");
 }
 
 /// Returns a pointer to the global TimerManager, starting the timer service
 /// worker on first call.  Must **not** be called from `worker_loop`.
 fn mgr() -> *const TimerManager {
     let p = mgr_ptr_only();
-    WORKER.get_or_init(start_worker);
+    unsafe {
+        libc::pthread_once(&raw mut WORKER_ONCE, init_timer_worker_only);
+    }
     p
 }
 
@@ -173,18 +200,6 @@ fn timer_unlock(p: *const TimerManager) {
 extern "C" fn timer_worker_entry(_arg: *mut c_void) -> *mut c_void {
     worker_loop();
     core::ptr::null_mut()
-}
-
-fn start_worker() -> sys_thread::PosixThread {
-    let thread = unsafe { sys_thread::create(None, timer_worker_entry, core::ptr::null_mut()) }
-        .expect("TimerManager: pthread_create");
-
-    // Detach failure is an unrecoverable init error: the worker is already
-    // running, and a joinable-but-never-joined pthread leaks resources.
-    let detached = unsafe { sys_thread::detach(thread) };
-    assert!(detached, "TimerManager: pthread_detach");
-
-    thread
 }
 
 // -- raw pointer accessors (pthread mutex provides safety) -------------------
@@ -286,9 +301,9 @@ fn worker_loop() {
                 id: 0,
                 handle: item.timer_id as TimerHandle,
             });
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = (item.callback)(t, item.param.clone());
-            }));
+            // POSIX no_std backend does NOT catch panics in timer callbacks.
+            // Callbacks must not panic; use panic=abort.
+            let _ = (item.callback)(t, item.param.clone());
         }
 
         // ---- Step 4: re-lock, apply post-callback state ----
