@@ -239,8 +239,8 @@ compile_error!(
 #[cfg(all(feature = "linux", not(feature = "std")))]
 compile_error!("The `linux` backend requires the `std` feature.");
 
-#[cfg(not(any(feature = "freertos", feature = "std")))]
-compile_error!("Enable either the `freertos` backend or the `std` host backend.");
+#[cfg(not(any(feature = "freertos", feature = "linux", feature = "posix")))]
+compile_error!("Enable one OSAL backend feature: freertos | linux | posix.");
 
 /// FreeRTOS implementation of OSAL traits.
 ///
@@ -254,25 +254,28 @@ mod freertos;
 /// Linux host reference implementation.
 ///
 /// This module is a pure Rust reference implementation for all OSAL traits
-/// using safe Rust standard library primitives.  It is compiled when either
-/// the `linux` or `posix` feature is active. The POSIX backend has its
-/// own config/types modules and native pthread-based trait implementations,
-/// while Linux remains a pure Rust reference backend.
+/// using safe Rust standard library primitives.  It is compiled only when
+/// the `linux` feature is active.
 ///
-/// Enabled with the `linux` or `posix` feature flag.
-#[cfg(any(feature = "linux", feature = "posix"))]
+/// The POSIX backend has its own config/types modules and native pthread-based
+/// trait implementations.  Linux remains a separate pure Rust reference backend.
+///
+/// Enabled with the `linux` feature flag.
+#[cfg(feature = "linux")]
 mod linux;
 
-/// POSIX OSAL backend — native pthread implementation.
+/// POSIX OSAL backend — native pthread implementation (no_std + alloc).
 ///
 /// Following NASA's OSAL architecture, POSIX is the adaptation layer using
 /// `libc::pthread_*` primitives (`pthread_mutex`, `pthread_cond`,
-/// `pthread_create`, `CLOCK_MONOTONIC`).  The Linux backend remains
-/// independently usable as a pure Rust reference implementation via the
-/// `linux` feature.
+/// `pthread_create`, `CLOCK_MONOTONIC`).  This backend depends on `core`,
+/// `alloc`, and `libc` — it does **not** require `std`.
 ///
-/// Enabled with the `posix` feature flag (when `linux` is not also enabled).
-#[cfg(all(feature = "posix", not(feature = "linux")))]
+/// The Linux backend remains independently usable as a pure Rust reference
+/// implementation via the `linux` feature.
+///
+/// Enabled with the `posix` feature flag.
+#[cfg(feature = "posix")]
 mod posix;
 
 pub mod log;
@@ -294,7 +297,7 @@ use crate::freertos as osal;
 use crate::linux as osal;
 
 /// Select POSIX as the active OSAL backend (native pthread primitives).
-#[cfg(all(feature = "posix", not(feature = "linux")))]
+#[cfg(feature = "posix")]
 use crate::posix as osal;
 
 /// Main OSAL module re-exporting all OS abstractions and traits.
@@ -426,29 +429,12 @@ pub mod os {
     pub use crate::traits::*;
 }
 
-/// Default panic handler for `no_std` environments.
+/// Default panic handler for `no_std` FreeRTOS environments.
 ///
-/// This panic handler is active when the `disable_panic` feature is **not** enabled.
-/// It prints panic information and enters an infinite loop to halt execution.
-///
-/// # Behavior
-///
-/// 1. Attempts to print panic information using the `println!` macro
-/// 2. Enters an infinite empty loop, halting the program
-///
-/// # Feature Flag
-///
-/// - Enabled by default in library mode
-/// - Disabled with `disable_panic` feature when users want to provide their own handler
-/// - Automatically disabled in examples that use `std`
-///
-/// # Safety
-///
-/// This handler is intentionally simple and does not attempt cleanup or recovery.
-/// In production embedded systems, consider:
-/// - Logging panic info to persistent storage
-/// - Performing safe shutdown procedures
-/// - Resetting the system via watchdog
+/// This panic handler is **only** active when the `freertos` feature is enabled
+/// and `disable_panic` is **not** enabled.  POSIX and Linux backends rely on
+/// the host / test harness panic handler (or the final application binary)
+/// instead.
 ///
 /// # Custom Panic Handler
 ///
@@ -460,10 +446,9 @@ pub mod os {
 /// ```
 ///
 /// Then define your own `#[panic_handler]` in your application.
-#[cfg(not(feature = "disable_panic"))]
+#[cfg(all(feature = "freertos", not(feature = "disable_panic")))]
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    println!("Panic occurred: {}", info);
+fn panic(_info: &core::panic::PanicInfo) -> ! {
     #[allow(clippy::empty_loop)]
     loop {}
 }
