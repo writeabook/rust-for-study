@@ -66,14 +66,13 @@
 //!   outside the timer-manager lock.
 //! - [`bsp`] — Board Support Package selection (platform-specific config).
 //!
-//! # Relationship to the Linux backend
+//! # Relationship to Linux
 //!
-//! The Linux backend (`crate::linux`) remains independently usable as a
-//! pure Rust reference implementation via `--features linux,std`.  The
-//! The POSIX backend no longer re-exports Linux modules. It has its own
-//! `config`, `types`, and native pthread-based implementations for the
-//! OSAL primitives, while the Linux backend remains a separate pure Rust
-//! reference implementation.
+//! The POSIX backend targets Linux through its `generic_linux` BSP
+//! (`posix/bsp/generic_linux.rs`), which provides platform constants
+//! (`TICK_PERIOD_MS = 1`, `TickType = u32`) and type aliases.  All
+//! OSAL primitives are implemented with native pthread / libc APIs
+//! (`posix/sys/`).
 
 pub(crate) mod allocator;
 pub mod bsp;
