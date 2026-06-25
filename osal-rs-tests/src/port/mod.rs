@@ -4,9 +4,6 @@
 //! exercised. They must **not** duplicate full API contract tests (those
 //! live in `crate::api`).
 
-#[cfg(feature = "linux")]
-mod linux_legacy_smoke_tests;
-
 #[cfg(feature = "posix")]
 mod posix_smoke_tests;
 

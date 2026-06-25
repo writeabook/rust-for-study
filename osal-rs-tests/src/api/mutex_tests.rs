@@ -175,7 +175,7 @@ pub fn test_raw_mutex_recursive() -> Result<()> {
     assert_eq!(raw.unlock(), OsalRsBool::True);
 
     // Cross-thread checks — only on std-enabled backends (linux, posix)
-    #[cfg(any(feature = "linux", feature = "posix"))]
+    #[cfg(feature = "posix")]
     {
         use std::thread;
 
@@ -194,7 +194,7 @@ pub fn test_raw_mutex_recursive() -> Result<()> {
     assert_eq!(raw.unlock(), OsalRsBool::False);
 
     // Cross-thread check — only on std-enabled backends
-    #[cfg(any(feature = "linux", feature = "posix"))]
+    #[cfg(feature = "posix")]
     {
         use std::thread;
 

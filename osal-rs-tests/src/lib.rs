@@ -18,7 +18,7 @@
  *
  ***************************************************************************/
 
-#![cfg_attr(not(any(feature = "linux", feature = "posix")), no_std)]
+#![cfg_attr(not(feature = "posix"), no_std)]
 
 extern crate alloc;
 
@@ -38,14 +38,8 @@ mod coverage;
 #[cfg(test)]
 mod port;
 
-#[cfg(feature = "linux")]
-pub mod legacy;
-
 #[cfg(feature = "freertos")]
 pub mod freertos;
-
-#[cfg(feature = "linux")]
-pub mod linux;
 
 #[cfg(feature = "posix")]
 pub mod posix;

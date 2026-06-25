@@ -71,9 +71,6 @@ host functionality.
 # POSIX (default)
 cargo test -p osal-rs-tests
 
-# Linux legacy
-cargo test -p osal-rs-tests --no-default-features --features linux
-
 # FreeRTOS (check only; execution requires embedded target)
 cargo check -p osal-rs-tests --no-default-features --features freertos
 ```
