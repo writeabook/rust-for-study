@@ -22,7 +22,7 @@ OSAL-RS provides a unified API for developing multi-platform embedded applicatio
 
 - ✅ **FreeRTOS**: Fully implemented and tested
 - ✅ **Serialization**: Complete osal-rs-serde implementation with derive macros
-- ✅ **POSIX**: Native pthread + libc backend (mutex, semaphore, queue, event-group, thread, timer, system) — runs on Linux host
+- ✅ **POSIX**: Native pthread + libc backend (mutex, semaphore, queue, event-group, thread, timer, system) — Linux host via `generic_linux` BSP
 - 🚧 **Other RTOSes**: Under consideration
 
 ## Features
@@ -86,11 +86,19 @@ For typed inter-task communication, prefer `QueueStreamed<T>`
 
 ```rust
 use osal_rs::os::QueueStreamed;
+use osal_rs::traits::BytesHasLen;
+use osal_rs_serde::{Deserialize, Serialize};
+
+const CMD_SIZE: usize = 12; // u32 + 4 × u16
 
 #[derive(Serialize, Deserialize)]
 struct Command { id: u32, params: [u16; 4] }
 
-let queue = QueueStreamed::<Command>::new(10, 32).unwrap();
+impl BytesHasLen for Command {
+    fn len(&self) -> usize { CMD_SIZE }
+}
+
+let queue = QueueStreamed::<Command>::new(10, CMD_SIZE as _).unwrap();
 queue.post(&Command { id: 42, params: [1, 2, 3, 4] }, 100).unwrap();
 
 let mut cmd = Command { id: 0, params: [0; 4] };
