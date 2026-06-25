@@ -22,8 +22,7 @@ OSAL-RS provides a unified API for developing multi-platform embedded applicatio
 
 - ✅ **FreeRTOS**: Fully implemented and tested
 - ✅ **Serialization**: Complete osal-rs-serde implementation with derive macros
-- ✅ **POSIX**: Native pthread backend (mutex, semaphore, queue, event-group, thread, timer, system)
-- ✅ **Linux**: Host reference backend for development and CI
+- ✅ **POSIX**: Native pthread + libc backend (mutex, semaphore, queue, event-group, thread, timer, system) — runs on Linux host
 - 🚧 **Other RTOSes**: Under consideration
 
 ## Features
@@ -480,11 +479,11 @@ reference `pthread`, `std::thread`, or FreeRTOS C APIs.
 # Run contract tests against the POSIX backend
 cargo test -p osal-rs-tests --no-default-features --features posix
 
-# Run contract tests against the Linux backend
-cargo test -p osal-rs-tests --no-default-features --features linux
+# Run contract tests against the POSIX backend (Linux host)
+cargo test -p osal-rs-tests --no-default-features --features posix
 ```
 
-### 2. Backend Runners (`osal-rs-tests/src/{linux,posix,freertos}/`)
+### 2. Backend Runners (`osal-rs-tests/src/{posix,freertos}/`)
 
 Thin `#[test]` entry points that execute the shared contract suite
 (`crate::common`) against a specific backend.  The POSIX runner also
@@ -506,11 +505,8 @@ with no code changes.  Validates the core OSAL promise: same API,
 different OS.
 
 ```bash
-# Run the portable demo on the Linux backend
-cargo run --example portable_osal_integration_demo --no-default-features --features linux
-
-# Run the portable demo on the POSIX backend
-cargo run --example portable_osal_integration_demo --no-default-features --features posix
+# Run the portable demo on the POSIX backend (Linux host)
+cargo run --example portable_osal_integration_demo --no-default-features --features "posix std"
 ```
 
 ### 5. Typed Message Queue Demo (`osal-rs/examples/`)
@@ -536,10 +532,7 @@ the raw `[u8; 16]` byte queue with `QueueStreamed<SensorPacket>`.
 ```
 
 ```bash
-# Linux backend
-cargo run --example typed_message_queue_demo --no-default-features --features "linux serde"
-
-# POSIX backend
+# POSIX backend (Linux host)
 cargo run --example typed_message_queue_demo --no-default-features --features "posix std serde"
 ```
 

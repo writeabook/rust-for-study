@@ -21,16 +21,16 @@
 //! cleanup).  The core uses only `osal_rs::os::*`; no Linux-specific or
 //! FreeRTOS-specific APIs appear in the business logic.
 //!
-//! - **Host runner** (`main` with `cfg(any(feature = "linux", feature = "posix"))`):
+//! - **Host runner** (`main` with `cfg(feature = "posix")`):
 //!   calls `demo_startup()`, waits for `DONE_BIT`, joins threads, exits.
 //! - **FreeRTOS runner** (`freertos_demo_entry` with `cfg(feature = "freertos")`):
 //!   calls `demo_startup()`, then `System::start()`.
 //!
-//! # Build & Run (Linux)
+//! # Build & Run
 //!
 //! ```bash
 //! cargo run --example portable_osal_integration_demo \
-//!     --no-default-features --features linux
+//!     --no-default-features --features "posix std"
 //! ```
 
 extern crate alloc;
@@ -516,14 +516,10 @@ pub fn demo_startup() -> Result<DemoApp> {
 // Platform runners
 // ===========================================================================
 
-/// Linux runner — calls `demo_startup()`, waits for `DONE_BIT`, joins all
-/// threads, and exits cleanly.
-#[cfg(any(feature = "linux", feature = "posix"))]
+/// Host runner (POSIX backend on Linux host) — calls `demo_startup()`,
+/// waits for `DONE_BIT`, joins all threads, and exits cleanly.
+#[cfg(feature = "posix")]
 fn main() -> Result<()> {
-    #[cfg(feature = "linux")]
-    demo_log!("[main] run portable demo on linux backend");
-
-    #[cfg(feature = "posix")]
     demo_log!("[main] run portable demo on posix backend");
 
     let app = demo_startup()?;

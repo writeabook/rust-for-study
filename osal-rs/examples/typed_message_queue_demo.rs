@@ -20,14 +20,9 @@
 //! # Build & Run
 //!
 //! ```bash
-//! # Linux backend  — `linux` implies `std`, no extra `std` needed.
-//! cargo run -p osal-rs --example typed_message_queue_demo \
-//!     --no-default-features --features "linux serde"
-//!
-//! # POSIX backend — `posix` is no_std and provides its own panic handler /
-//! # allocator.  The example binary uses std as its runtime, so `std` must be
-//! # enabled to hand those responsibilities back to the host toolchain and
-//! # avoid a duplicate `panic_impl` lang-item conflict.
+//! # POSIX backend (Linux host) — `posix` is no_std and provides its own
+//! # panic handler / allocator.  The example binary uses std as its runtime,
+//! # so `std` must be enabled to avoid a duplicate `panic_impl` conflict.
 //! cargo run -p osal-rs --example typed_message_queue_demo \
 //!     --no-default-features --features "posix std serde"
 //! ```
@@ -512,13 +507,9 @@ pub fn demo_startup() -> Result<DemoApp> {
 // Platform runners
 // ===========================================================================
 
-/// Host runner — identical to original.
-#[cfg(any(feature = "linux", feature = "posix"))]
+/// Host runner — POSIX backend on Linux host.
+#[cfg(feature = "posix")]
 fn main() -> Result<()> {
-    #[cfg(feature = "linux")]
-    demo_log!("[main] run typed message queue demo on linux backend");
-
-    #[cfg(feature = "posix")]
     demo_log!("[main] run typed message queue demo on posix backend");
 
     let app = demo_startup()?;
