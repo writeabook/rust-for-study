@@ -18,8 +18,8 @@
 //!
 //! The demo separates the **portable core** (task logic, resource creation,
 //! synchronisation primitives) from the **platform runner** (entry point,
-//! cleanup).  The core uses only `osal_rs::os::*`; no Linux-specific or
-//! FreeRTOS-specific APIs appear in the business logic.
+//! cleanup).  The core uses only `osal_rs::os::*`; no backend-specific
+//! APIs appear in the business logic.
 //!
 //! - **Host runner** (`main` with `cfg(feature = "posix")`):
 //!   calls `demo_startup()`, waits for `DONE_BIT`, joins threads, exits.
@@ -436,7 +436,7 @@ fn create_heartbeat_timer(monitor: &Thread) -> Result<Arc<Timer>> {
 }
 
 // ---------------------------------------------------------------------------
-// Portable startup — called by both Linux and FreeRTOS runners
+// Portable startup — called by both POSIX host and FreeRTOS runners
 // ---------------------------------------------------------------------------
 
 pub fn demo_startup() -> Result<DemoApp> {
@@ -527,7 +527,7 @@ fn main() -> Result<()> {
     // Wait for the Supervisor to signal demo completion.
     app.resources.events.wait(DONE_BIT, TickType::MAX);
 
-    // Linux requires join() to reclaim OS thread resources.
+    // POSIX host threads require join() to reclaim thread resources.
     app.producer0.join(core::ptr::null_mut())?;
     app.producer1.join(core::ptr::null_mut())?;
     app.consumer0.join(core::ptr::null_mut())?;

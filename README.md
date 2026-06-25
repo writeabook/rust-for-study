@@ -12,7 +12,7 @@ OSAL-RS provides a unified API for developing multi-platform embedded applicatio
 
 ### Workspace Components
 
-- **osal-rs**: Main Operating System Abstraction Layer with FreeRTOS support
+- **osal-rs**: Main Operating System Abstraction Layer with FreeRTOS and POSIX backends
 - **osal-rs-build**: Build configuration tools and helpers
 - **osal-rs-porting**: C FFI bridge layer for FreeRTOS integration
 - **osal-rs-tests**: Comprehensive test suite for all components
@@ -81,31 +81,24 @@ assert_eq!(data, restored);
 
 #### Integration with OSAL Queues
 
-Perfect for inter-task communication:
+For typed inter-task communication, prefer `QueueStreamed<T>`
+(automatic serialisation — see `typed_message_queue_demo.rs`):
 
 ```rust
-use osal_rs::os::{Queue, QueueFn};
-use osal_rs_serde::{Serialize, Deserialize, to_bytes, from_bytes};
+use osal_rs::os::QueueStreamed;
 
 #[derive(Serialize, Deserialize)]
-struct Command {
-    id: u32,
-    params: [u16; 4],
-}
+struct Command { id: u32, params: [u16; 4] }
 
-fn sender_task(queue: &Queue) {
-    let cmd = Command { id: 42, params: [1, 2, 3, 4] };
-    let mut buffer = [0u8; 32];
-    let len = to_bytes(&cmd, &mut buffer).unwrap();
-    queue.post(&buffer[..len], 100).unwrap();
-}
+let queue = QueueStreamed::<Command>::new(10, 32).unwrap();
+queue.post(&Command { id: 42, params: [1, 2, 3, 4] }, 100).unwrap();
 
-fn receiver_task(queue: &Queue) {
-    let mut buffer = [0u8; 32];
-    queue.fetch(&mut buffer, 100).unwrap();
-    let cmd: Command = from_bytes(&buffer).unwrap();
-}
+let mut cmd = Command { id: 0, params: [0; 4] };
+queue.fetch(&mut cmd, 100).unwrap();
 ```
+
+Raw `Queue` with manual `to_bytes` / `from_bytes` is also available
+when you need full control over byte buffers.
 
 For comprehensive documentation, examples, and advanced features, see:
 - [osal-rs-serde README](osal-rs-serde/README.md) - Complete feature documentation
@@ -424,7 +417,7 @@ OSAL-RS provides several Cargo features to customize the build configuration for
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `freertos` | ✅ | Enable FreeRTOS backend implementation. This is the default and fully implemented feature for embedded RTOS development. |
-| `posix` | ❌ | Enable POSIX backend with native pthread primitives (`pthread_mutex`, `pthread_cond`, `pthread_create`, `CLOCK_MONOTONIC`). Requires `std`. |
+| `posix` | ❌ | Enable POSIX pthread/libc backend. Does **not** require `std`; host examples and tests usually enable `std` for the binary runtime. |
 | `std` | ❌ | Enable standard library support. Automatically enables `disable_panic`. Use this for native development and testing environments. |
 | `disable_panic` | ❌ | Disable custom panic handler. Enabled automatically when `std` feature is active. Useful when you want to use the default panic behavior. |
 | `serde` | ❌ | Enable serialization/deserialization support via `osal-rs-serde`. Includes derive macros for automatic implementation. |
@@ -479,8 +472,8 @@ reference `pthread`, `std::thread`, or FreeRTOS C APIs.
 # Run contract tests against the POSIX backend
 cargo test -p osal-rs-tests --no-default-features --features posix
 
-# Run contract tests against the POSIX backend (Linux host)
-cargo test -p osal-rs-tests --no-default-features --features posix
+# With serde support
+cargo test -p osal-rs-tests --no-default-features --features "posix serde"
 ```
 
 ### 2. Backend Runners (`osal-rs-tests/src/{posix,freertos}/`)

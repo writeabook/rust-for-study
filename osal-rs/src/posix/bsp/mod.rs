@@ -9,13 +9,11 @@
 //! ```text
 //!   Application code
 //!        ↓
-//!   pub mod os  (unified API)
+//!   osal_rs::os  (unified API)
 //!        ↓
-//!   posix/  (POSIX adaptation layer — OS trait → POSIX API mapping)
-//!        ↓
-//!   posix/sys/  (pthread / clock / condvar wrappers)
-//!        ↓
-//!   posix/bsp/generic_linux  (platform constants & types)
+//!   posix/  (OSAL trait → POSIX API mapping)
+//!   ├── sys/                   pthread / clock / condvar wrappers
+//!   └── bsp/generic_linux      Linux host constants & type aliases
 //!        ↓
 //!   Linux kernel / glibc / musl
 //! ```
@@ -30,7 +28,7 @@
 //!
 //! To add a new BSP target (e.g., macOS, FreeBSD):
 //!
-//! 1. Create `posix/bsp/<target>.rs` with the same constants and types
+//! 1. Create `posix/bsp/generic_<target>.rs` with the same constants and types
 //! 2. Add a feature flag (e.g., `bsp-macos`) in `Cargo.toml`
 //! 3. Update `posix/config.rs` and `posix/types.rs` to conditionally
 //!    re-export from the correct BSP

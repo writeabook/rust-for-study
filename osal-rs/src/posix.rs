@@ -27,8 +27,9 @@
 //!
 //! # Architecture (NASA OSAL pattern)
 //!
-//! Following NASA's OSAL architecture, **POSIX is the adaptation layer**
-//! and **Linux is one BSP / reference implementation**:
+//! Following NASA's OSAL architecture, **POSIX is the OS adaptation layer**,
+//! while **Linux is supported through the `generic_linux` BSP**
+//! (`posix/bsp/generic_linux`).  Linux is not a standalone OSAL backend.
 //!
 //! ```text
 //!   Application code
