@@ -364,38 +364,34 @@ corrosion_set_env_vars(osal-rs
 
 ```rust
 use osal_rs::os::*;
+use core::time::Duration;
+use alloc::sync::Arc;
 
-fn main() {
-    // Create a thread
-    let thread = Thread::new(
-        "my_thread",
-        4096,
-        ThreadPriority::Normal,
-        || {
-            loop {
-                println!("Hello from thread!");
-                Duration::from_millis(1000).sleep();
-            }
-        }
-    );
-
+fn main() -> osal_rs::utils::Result<()> {
     // Create a mutex
-    let mutex = Mutex::new().unwrap();
-    
-    // Use synchronization
-    {
-        let _guard = mutex.lock();
-        // Critical section
-    }
+    let counter = Arc::new(Mutex::new(0u32));
+    let c = counter.clone();
 
-    // Create a queue
-    let queue: Queue<u32> = Queue::new(10).unwrap();
-    queue.send(42, Duration::from_millis(100)).unwrap();
-    
-    let value = queue.receive(Duration::from_millis(100)).unwrap();
-    println!("Received: {}", value);
+    // Create and spawn a thread
+    let mut thread = Thread::new("worker", 4096, 2);
+    thread.spawn_simple(move || {
+        *c.lock().unwrap() += 1;
+    })?;
+
+    // Create a queue for inter-task messages
+    let queue = Queue::new(16, 4)?;
+    queue.post(&[1u8, 2, 3, 4], 100)?;
+
+    let mut buf = [0u8; 4];
+    queue.fetch(&mut buf, 100)?;
+
+    // Join and clean up
+    thread.join(core::ptr::null_mut())?;
+    Ok(())
 }
 ```
+
+See `osal-rs/examples/` for full multi-task pipeline demos.
 
 ## Building
 
@@ -412,8 +408,8 @@ cargo build --release --target thumbv7em-none-eabihf --features freertos
 ### For native development/testing:
 
 ```bash
-# Build with POSIX support (when implemented)
-cargo build --features posix,std
+# Build with POSIX support for native development/testing
+cargo build --no-default-features --features "posix std"
 ```
 
 ## Cargo Features
@@ -444,12 +440,12 @@ cargo build --target thumbv7em-none-eabihf --features freertos,serde
 
 #### Native Development with Standard Library
 ```bash
-cargo build --features posix,std
+cargo build --no-default-features --features "posix std"
 ```
 
 #### Native Development with Serialization
 ```bash
-cargo build --features posix,std,serde
+cargo build --no-default-features --features "posix std serde"
 ```
 
 ### Using Features in Cargo.toml
@@ -458,10 +454,10 @@ To use OSAL-RS in your project with specific features:
 
 ```toml
 [dependencies]
-osal-rs = { version = "0.4", features = ["freertos"] }
+osal-rs = { version = "0.5", default-features = false, features = ["freertos"] }
 
 # Or with serialization support
-osal-rs = { version = "0.4", features = ["freertos", "serde"] }
+osal-rs = { version = "0.5", default-features = false, features = ["freertos", "serde"] }
 ```
 
 ## Testing Strategy
@@ -501,9 +497,9 @@ backend-specific modules and are clearly named (e.g.
 
 ### 4. Portable Integration Demo (`osal-rs/examples/`)
 
-A single application that compiles and runs against multiple backends
-with no code changes.  Validates the core OSAL promise: same API,
-different OS.
+A single application structured to run against POSIX host and FreeRTOS
+backends with minimal backend-specific runner code.  Validates the core
+OSAL promise: same portable core, different OS.
 
 ```bash
 # Run the portable demo on the POSIX backend (Linux host)
@@ -542,13 +538,28 @@ cargo run --example typed_message_queue_demo --no-default-features --features "p
 ```
 osal-rs/
 ├── osal-rs/              # Main library crate
+│   ├── src/
+│   │   ├── freertos/      # FreeRTOS backend
+│   │   ├── posix/         # POSIX backend (pthread + libc)
+│   │   │   ├── sys/       # pthread / clock / condvar wrappers
+│   │   │   └── bsp/       # BSP selection (generic_linux)
+│   │   └── lib.rs
+│   └── examples/
+├── osal-rs-tests/        # Contract and backend test suite
+├── osal-rs-serde/        # no_std serialization framework
+│   └── derive/            # Derive macros (Serialize, Deserialize)
 ├── osal-rs-build/        # Build utilities
-├── osal-rs-tests/        # Test suite
-└── osal-rs-porting/      # Platform-specific C/C++ code
-    └── freertos/         # FreeRTOS porting layer
-        ├── inc/          # Header files
-        └── src/          # Implementation
+├── osal-rs-porting/      # FreeRTOS C FFI bridge
+├── doc/                  # Design notes and contract docs
+└── README.md
 ```
+
+## Design Notes
+
+- [OSAL Contract](doc/osal-contract.md) — portable behavior contract for all backends
+- [OSAL 行为契约](doc/osal-contract-zh.md) (Chinese)
+- [FreeRTOS ↔ POSIX Host Backend Alignment Gaps](doc/freertos-posix-alignment-gaps.md)
+- [FreeRTOS ↔ POSIX 主机后端行为差异说明](doc/freertos-posix-alignment-gaps-zh.md) (Chinese)
 
 ## License
 
@@ -562,16 +573,8 @@ Contributions are welcome! Please feel free to submit pull requests or open issu
 
 Antonio Salsi - [passy.linux@zresa.it](mailto:passy.linux@zresa.it)
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
 ## Links
 
-- [Repository](https://github.com/HiHappyGarden/osal-rs)
+- [Repository](https://github.com/writeabook/rust-for-study)
 - [Documentation](https://docs.rs/osal-rs)
 - [Crates.io](https://crates.io/crates/osal-rs)
-
-## Example implementation
-
-[https://github.com/HiHappyGarden/hi-happy-garden-rs](https://github.com/HiHappyGarden/hi-happy-garden-rs)
