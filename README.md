@@ -98,7 +98,7 @@ impl BytesHasLen for Command {
     fn len(&self) -> usize { CMD_SIZE }
 }
 
-let queue = QueueStreamed::<Command>::new(10, CMD_SIZE as _).unwrap();
+let queue: QueueStreamed<Command> = QueueStreamed::new(10, CMD_SIZE as _).unwrap();
 queue.post(&Command { id: 42, params: [1, 2, 3, 4] }, 100).unwrap();
 
 let mut cmd = Command { id: 0, params: [0; 4] };
@@ -365,7 +365,7 @@ corrosion_set_env_vars(osal-rs
 ```rust
 use osal_rs::os::*;
 use core::time::Duration;
-use alloc::sync::Arc;
+use std::sync::Arc;
 
 fn main() -> osal_rs::utils::Result<()> {
     // Create a mutex
