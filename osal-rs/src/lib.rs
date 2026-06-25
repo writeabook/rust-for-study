@@ -25,8 +25,8 @@
 //! ## Overview
 //!
 //! OSAL-RS provides a unified, safe Rust API for working with different real-time
-//! operating systems. Currently supports FreeRTOS, Linux (host reference),
-//! and POSIX (native pthread) backends.
+//! operating systems. Currently supports FreeRTOS (embedded) and POSIX
+//! (native pthread, Linux host) backends.
 //!
 //! ## Features
 //!
@@ -144,7 +144,6 @@
 //! - `traits` - Private module defining the trait abstractions
 //! - `freertos` - Private FreeRTOS implementation (enabled with `freertos` feature)
 //! - `posix` - Private POSIX implementation — no_std + alloc + libc (enabled with `posix` feature)
-//! - `linux` - Private Linux reference implementation — std-based (enabled with `linux` feature)
 //!
 //! ## Features
 //!
@@ -152,8 +151,7 @@
 //! |-------------|------------------------------------------------------|--------|
 //! | `freertos`  | FreeRTOS backend (default)                           | no_std |
 //! | `posix`     | POSIX pthread/libc backend                           | no_std |
-//! | `linux`     | Linux std-based reference backend                    | std    |
-//! | `std`       | Enable std support (required by `linux`)             | —      |
+//! | `std`       | Enable std runtime (host binaries, tests)            | —      |
 //! | `disable_panic` | Disable built-in panic handler and allocator      | —      |
 //!
 //! The `posix` backend uses `no_std` + `alloc` + `libc`.  It does **not**
@@ -235,20 +233,13 @@ extern crate alloc;
 // ---------------------------------------------------------------------------
 // Backend mutual-exclusion guard
 // ---------------------------------------------------------------------------
-#[cfg(any(
-    all(feature = "freertos", feature = "linux"),
-    all(feature = "freertos", feature = "posix"),
-    all(feature = "linux", feature = "posix"),
-))]
+#[cfg(all(feature = "freertos", feature = "posix"))]
 compile_error!(
-    "Only one OSAL backend feature may be enabled at a time (freertos | linux | posix)."
+    "Only one OSAL backend feature may be enabled at a time (freertos | posix)."
 );
 
-#[cfg(all(feature = "linux", not(feature = "std")))]
-compile_error!("The `linux` backend requires the `std` feature.");
-
-#[cfg(not(any(feature = "freertos", feature = "linux", feature = "posix")))]
-compile_error!("Enable one OSAL backend feature: freertos | linux | posix.");
+#[cfg(not(any(feature = "freertos", feature = "posix")))]
+compile_error!("Enable one OSAL backend feature: freertos | posix.");
 
 /// FreeRTOS implementation of OSAL traits.
 ///
@@ -259,28 +250,12 @@ compile_error!("Enable one OSAL backend feature: freertos | linux | posix.");
 #[cfg(feature = "freertos")]
 mod freertos;
 
-/// Linux host reference implementation.
-///
-/// This module is a pure Rust reference implementation for all OSAL traits
-/// using safe Rust standard library primitives.  It is compiled only when
-/// the `linux` feature is active.
-///
-/// The POSIX backend has its own config/types modules and native pthread-based
-/// trait implementations.  Linux remains a separate pure Rust reference backend.
-///
-/// Enabled with the `linux` feature flag.
-#[cfg(feature = "linux")]
-mod linux;
-
 /// POSIX OSAL backend — native pthread implementation (no_std + alloc).
 ///
 /// Following NASA's OSAL architecture, POSIX is the adaptation layer using
 /// `libc::pthread_*` primitives (`pthread_mutex`, `pthread_cond`,
 /// `pthread_create`, `CLOCK_MONOTONIC`).  This backend depends on `core`,
 /// `alloc`, and `libc` — it does **not** require `std`.
-///
-/// The Linux backend remains independently usable as a pure Rust reference
-/// implementation via the `linux` feature.
 ///
 /// Enabled with the `posix` feature flag.
 #[cfg(feature = "posix")]
@@ -299,10 +274,6 @@ pub mod utils;
 /// Select FreeRTOS as the active OSAL backend.
 #[cfg(feature = "freertos")]
 use crate::freertos as osal;
-
-/// Select Linux as the active OSAL backend.
-#[cfg(feature = "linux")]
-use crate::linux as osal;
 
 /// Select POSIX as the active OSAL backend (native pthread primitives).
 #[cfg(feature = "posix")]
@@ -337,7 +308,6 @@ use crate::posix as osal;
 ///     System::start();
 /// }
 /// ```
-#[cfg(not(feature = "linux"))]
 pub mod os {
 
     #[cfg(all(not(feature = "disable_panic"), feature = "freertos"))]
@@ -428,34 +398,10 @@ pub mod os {
     pub use crate::osal::types;
 }
 
-/// OSAL module for the Linux backend.
-///
-/// This module is active when `linux` is the selected host backend
-/// (`--features linux`).  It provides direct access to the Linux reference
-/// implementation types.
-#[cfg(all(feature = "linux", not(feature = "freertos")))]
-pub mod os {
-    pub use crate::linux::config;
-    #[allow(unused_imports)]
-    pub use crate::linux::event_group::*;
-    pub use crate::linux::mutex::*;
-    #[allow(unused_imports)]
-    pub use crate::linux::queue::*;
-    pub use crate::linux::semaphore::*;
-    pub use crate::linux::system::{System, SystemState};
-    pub use crate::linux::thread::{Thread, ThreadMetadata, ThreadState};
-    #[allow(unused_imports)]
-    pub use crate::linux::timer::*;
-    pub use crate::linux::types;
-    pub use crate::traits::*;
-}
-
 /// Default panic handler for `no_std` backends (FreeRTOS / POSIX).
 ///
 /// This panic handler is active when a `no_std` backend (`freertos` or
 /// `posix`) is enabled and `disable_panic` is **not** enabled.
-///
-/// The `linux` backend uses `std` and does **not** install this handler.
 ///
 /// # Custom Panic Handler
 ///
