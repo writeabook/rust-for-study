@@ -506,8 +506,41 @@ with no code changes.  Validates the core OSAL promise: same API,
 different OS.
 
 ```bash
+# Run the portable demo on the Linux backend
+cargo run --example portable_osal_integration_demo --no-default-features --features linux
+
 # Run the portable demo on the POSIX backend
 cargo run --example portable_osal_integration_demo --no-default-features --features posix
+```
+
+### 5. Typed Message Queue Demo (`osal-rs/examples/`)
+
+Demonstrates structured inter-task communication using `QueueStreamed<T>`
+and `osal-rs-serde`.  A timer periodically releases a semaphore, the
+producer sends typed `SensorPacket` messages, and the consumer receives
+them without manual byte packing.
+
+```text
+  Timer ──(periodic)──> Semaphore ──(release)──> Producer
+                                                     │
+                                                     ▼
+                                         QueueStreamed<SensorPacket>
+                                                     │
+                                                     ▼
+                                                 Consumer
+```
+
+This example showcases:
+- `QueueStreamed<T>` — type-safe serialised message queues
+- `osal-rs-serde` — automatic `#[derive(Serialize, Deserialize)]` for message payloads
+- Timer + Semaphore + Queue coordination for structured task pipelines
+
+```bash
+# Linux backend
+cargo run --example typed_message_queue_demo --no-default-features --features "linux serde"
+
+# POSIX backend
+cargo run --example typed_message_queue_demo --no-default-features --features "posix std serde"
 ```
 
 ## Project Structure
