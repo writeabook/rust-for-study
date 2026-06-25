@@ -47,7 +47,7 @@ use osal_rs_serde::{Deserialize, Serialize};
 // Constants  (identical to portable_osal_integration_demo.rs)
 // ---------------------------------------------------------------------------
 
-const PACKET_SIZE: usize = 20; // SensorPacket = 5 × u32
+const MESSAGE_SIZE: usize = 20; // SensorPacket = 5 × u32
 const QUEUE_CAPACITY: usize = 128;
 const PRODUCER_COUNT: u32 = 2;
 const CONSUMER_COUNT: u32 = 3;
@@ -93,30 +93,32 @@ struct SensorPacket {
     producer_id: u32,
     sequence_id: u32,
     tick: u32,
+    value: u32,
     checksum: u32,
-    _pad: u32, // keep 20 bytes (5 × u32), same footprint as old PACKET_SIZE = 20
 }
 
 impl BytesHasLen for SensorPacket {
     fn len(&self) -> usize {
-        PACKET_SIZE
+        MESSAGE_SIZE
     }
 }
 
 impl SensorPacket {
     fn new(producer_id: u32, sequence_id: u32, tick: u32) -> Self {
-        let checksum = producer_id ^ sequence_id ^ tick;
+        let value = tick.wrapping_mul(producer_id.wrapping_add(1));
+        let checksum = producer_id ^ sequence_id ^ tick ^ value;
         Self {
             producer_id,
             sequence_id,
             tick,
+            value,
             checksum,
-            _pad: 0,
         }
     }
 
     fn is_valid(&self) -> bool {
-        let expected = self.producer_id ^ self.sequence_id ^ self.tick;
+        let expected =
+            self.producer_id ^ self.sequence_id ^ self.tick ^ self.value;
         self.checksum == expected
     }
 }
@@ -448,12 +450,12 @@ pub fn demo_startup() -> Result<DemoApp> {
 
     let queue = Arc::new(QueueStreamed::<SensorPacket>::new(
         QUEUE_CAPACITY as UBaseType,
-        PACKET_SIZE as UBaseType,
+        MESSAGE_SIZE as UBaseType,
     )?);
     demo_log!(
         "[init] QueueStreamed<SensorPacket> capacity={} message_size={}",
         QUEUE_CAPACITY,
-        PACKET_SIZE
+        MESSAGE_SIZE
     );
 
     let stats = Arc::new(Mutex::new(Stats::default()));

@@ -516,24 +516,24 @@ cargo run --example portable_osal_integration_demo --no-default-features --featu
 ### 5. Typed Message Queue Demo (`osal-rs/examples/`)
 
 Demonstrates structured inter-task communication using `QueueStreamed<T>`
-and `osal-rs-serde`.  A timer periodically releases a semaphore, the
-producer sends typed `SensorPacket` messages, and the consumer receives
-them without manual byte packing.
+and `osal-rs-serde`.  A timer periodically notifies the monitor task,
+producers send typed `SensorPacket` messages, and consumers receive them
+without manual byte packing.
+
+Compared with `portable_osal_integration_demo.rs`, this example keeps the
+same multi-task pipeline (2 producers, 3 consumers, supervisor lifecycle,
+head-start phase, mid-demo period change, graceful shutdown) but replaces
+the raw `[u8; 16]` byte queue with `QueueStreamed<SensorPacket>`.
 
 ```text
-  Timer ──(periodic)──> Semaphore ──(release)──> Producer
-                                                     │
-                                                     ▼
-                                         QueueStreamed<SensorPacket>
-                                                     │
-                                                     ▼
-                                                 Consumer
-```
+  Producers (×2) ──post──>  QueueStreamed<SensorPacket> ──fetch──>  Consumers (×3)
+                                                                        │
+                                                                        ▼
+                                                                 Shared Stats (Mutex)
 
-This example showcases:
-- `QueueStreamed<T>` — type-safe serialised message queues
-- `osal-rs-serde` — automatic `#[derive(Serialize, Deserialize)]` for message payloads
-- Timer + Semaphore + Queue coordination for structured task pipelines
+  Timer ──notify──> Monitor ──reads──> Stats
+  Supervisor controls START / STOP via EventGroup
+```
 
 ```bash
 # Linux backend
