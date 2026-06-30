@@ -230,13 +230,13 @@
 
 extern crate alloc;
 
+extern crate self as osal_rs;
+
 // ---------------------------------------------------------------------------
 // Backend mutual-exclusion guard
 // ---------------------------------------------------------------------------
 #[cfg(all(feature = "freertos", feature = "posix"))]
-compile_error!(
-    "Only one OSAL backend feature may be enabled at a time (freertos | posix)."
-);
+compile_error!("Only one OSAL backend feature may be enabled at a time (freertos | posix).");
 
 #[cfg(not(any(feature = "freertos", feature = "posix")))]
 compile_error!("Enable one OSAL backend feature: freertos | posix.");
@@ -274,6 +274,7 @@ pub mod utils;
 /// Select FreeRTOS as the active OSAL backend.
 #[cfg(feature = "freertos")]
 use crate::freertos as osal;
+pub mod freertos_demo_export;
 
 /// Select POSIX as the active OSAL backend (native pthread primitives).
 #[cfg(feature = "posix")]

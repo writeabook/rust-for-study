@@ -37,6 +37,7 @@ extern crate alloc;
 
 use core::time::Duration;
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 use osal_rs::os::types::{EventBits, StackType, TickType, UBaseType};
@@ -305,7 +306,26 @@ fn monitor_task(res: Arc<DemoResources>) {
 // Timer callback  — only notifies the Monitor, never blocks
 // ---------------------------------------------------------------------------
 
-fn timer_callback(_timer: Box<dyn TimerFn>, param: Option<TimerParam>) -> Result<TimerParam> {
+// fn timer_callback(_timer: Box<dyn TimerFn>, param: Option<TimerParam>) -> Result<TimerParam> {
+//     if let Some(p) = param {
+//         if let Some(thread) = p.downcast_ref::<Thread>() {
+//             let _ = thread.notify(ThreadNotification::SetBits(TIMER_TICK_BIT));
+//         }
+//         Ok(p)
+//     } else {
+//         Ok(Arc::new(()))
+//     }
+// }
+
+fn timer_callback(timer: Box<dyn TimerFn>, param: Option<TimerParam>) -> Result<TimerParam> {
+    /*
+     * Important:
+     * FreeRTOS timer callback wrapper reconstructs this Box from a raw pointer.
+     * Do not let it drop here, otherwise the next auto-reload timer callback
+     * may reuse an already-freed timer ID pointer and trigger heap_4.c assert.
+     */
+    core::mem::forget(timer);
+
     if let Some(p) = param {
         if let Some(thread) = p.downcast_ref::<Thread>() {
             let _ = thread.notify(ThreadNotification::SetBits(TIMER_TICK_BIT));
@@ -323,7 +343,8 @@ fn timer_callback(_timer: Box<dyn TimerFn>, param: Option<TimerParam>) -> Result
 fn supervisor_task(res: Arc<DemoResources>, heartbeat: Arc<Timer>) {
     // Phase 0 — wait for all tasks to signal ready.
     for _ in 0..TOTAL_READY_TASKS {
-        res.ready_sem.wait(TickType::MAX);
+        // res.ready_sem.wait(TickType::MAX);
+        res.ready_sem.wait(Duration::from_secs(60));
     }
 
     demo_log!("[supervisor] all tasks ready, set START_BIT");
@@ -541,15 +562,24 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// FreeRTOS entry point — calls `demo_startup()`, then starts the
-/// scheduler.  Under FreeRTOS `System::start()` does not return.
+/// FreeRTOS entry point: calls `demo_startup()`, keeps the demo resources alive,
+/// then starts the scheduler. Under FreeRTOS `System::start()` should not return.
 #[cfg(feature = "freertos")]
 pub fn freertos_demo_entry() -> Result<()> {
     demo_log!("[main] run portable demo on freertos backend");
 
-    let _app = demo_startup()?;
+    let app = demo_startup()?;
 
-    // Start the FreeRTOS scheduler.  This call never returns.
+    /*
+     * Important:
+     * Keep DemoApp alive for the whole firmware lifetime.
+     * Otherwise, if this function ever returns or unwinds unexpectedly,
+     * DemoApp will be dropped and may free FreeRTOS objects such as tasks,
+     * queues, semaphores, mutexes, event groups, and timers.
+     */
+    let _app_static = Box::leak(Box::new(app));
+
+    // Start the FreeRTOS scheduler. This call should not return.
     System::start();
 
     Ok(())

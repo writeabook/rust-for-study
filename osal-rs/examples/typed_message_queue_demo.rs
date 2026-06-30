@@ -32,6 +32,7 @@ extern crate alloc;
 use core::time::Duration;
 
 use alloc::sync::Arc;
+use alloc::boxed::Box;
 
 use osal_rs::os::types::{EventBits, StackType, TickType, UBaseType};
 use osal_rs::os::*;
@@ -112,8 +113,7 @@ impl SensorPacket {
     }
 
     fn is_valid(&self) -> bool {
-        let expected =
-            self.producer_id ^ self.sequence_id ^ self.tick ^ self.value;
+        let expected = self.producer_id ^ self.sequence_id ^ self.tick ^ self.value;
         self.checksum == expected
     }
 }
@@ -331,7 +331,8 @@ fn timer_callback(_timer: Box<dyn TimerFn>, param: Option<TimerParam>) -> Result
 
 fn supervisor_task(res: Arc<DemoResources>, heartbeat: Arc<Timer>) {
     for _ in 0..TOTAL_READY_TASKS {
-        res.ready_sem.wait(TickType::MAX);
+        // res.ready_sem.wait(TickType::MAX);
+        res.ready_sem.wait(Duration::from_millis(TickType::MAX as u64));
     }
 
     demo_log!("[supervisor] all tasks ready, set START_BIT");
