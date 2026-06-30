@@ -70,14 +70,60 @@ BaseType_t osal_rs_timer_delete(TimerHandle_t xTimer, TickType_t xTicksToWait)
     return xTimerGenericCommand(xTimer, tmrCOMMAND_DELETE, 0U, NULL, xTicksToWait);
 }
 
+// int printf_on_uart(const char *format, ...)
+// {
+//     va_list args;
+//     va_start(args, format);
+//     int ret = vprintf(format, args);
+//     va_end(args);
+//     return ret;
+// }
+
+////////////////////////////////////////////////////////////////////////////////////
+// printf in QEMU
+
+#define UART0_BASE_ADDR      (0x40004000UL)
+#define UART0_DATA_REG       (*(volatile unsigned int *)(UART0_BASE_ADDR + 0x00UL))
+#define UART0_STATE_REG      (*(volatile unsigned int *)(UART0_BASE_ADDR + 0x04UL))
+#define UART0_TX_FULL_MASK   (1UL)
+
+static void qemu_uart_putc(char ch)
+{
+    while ((UART0_STATE_REG & UART0_TX_FULL_MASK) != 0UL) {
+    }
+
+    UART0_DATA_REG = (unsigned int)ch;
+}
+
+static void qemu_uart_puts(const char *s)
+{
+    while (*s != '\0') {
+        if (*s == '\n') {
+            qemu_uart_putc('\r');
+        }
+
+        qemu_uart_putc(*s);
+        s++;
+    }
+}
+
 int printf_on_uart(const char *format, ...)
 {
+    char buffer[256];
+
     va_list args;
     va_start(args, format);
-    int ret = vprintf(format, args);
+    int ret = vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
+
+    buffer[sizeof(buffer) - 1] = '\0';
+
+    qemu_uart_puts(buffer);
+
     return ret;
 }
+
+////////////////////////////////////////////////////////////////////////////////////
 
 uint64_t osal_rs_config_cpu_clock_hz(void)
 {
