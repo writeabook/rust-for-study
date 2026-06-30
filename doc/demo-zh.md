@@ -888,39 +888,7 @@ osal-rs-porting/freertos/src/osal_rs_freertos.c
 
 ---
 
-## 19. 最终检查清单
-
-```bash
-# 1. Rust target
-rustup target list --installed | grep thumbv7m
-
-# 2. osal-rs 关键路径
-ls ~/osal-rs/osal-rs/Cargo.toml
-ls ~/osal-rs/osal-rs-porting/freertos/src/osal_rs_freertos.c
-ls ~/osal-rs/osal-rs-porting/freertos/inc
-
-# 3. FreeRTOSConfig.h
-ls ~/freertos/FreeRTOS/FreeRTOS/Demo/CORTEX_MPS2_QEMU_IAR_GCC/FreeRTOSConfig.h
-
-# 4. main.c 是否调用 Rust 入口
-grep -n "rust_demo_entry\|main_blinky\|main_full\|vTaskStartScheduler" \
-  ~/freertos/FreeRTOS/FreeRTOS/Demo/CORTEX_MPS2_QEMU_IAR_GCC/main.c
-
-# 5. Makefile 是否接入 osal-rs
-grep -n "OSAL_RS\|rust_osal\|osal_rs_freertos\|libosal_rs" \
-  ~/freertos/FreeRTOS/FreeRTOS/Demo/CORTEX_MPS2_QEMU_IAR_GCC/build/gcc/Makefile
-
-# 6. linker script 是否包含 .ARM.exidx
-grep -n "ARM.exidx\|__exidx_start\|__exidx_end" \
-  ~/freertos/FreeRTOS/FreeRTOS/Demo/CORTEX_MPS2_QEMU_IAR_GCC/build/gcc/mps2_m3.ld
-
-# 7. Rust 静态库是否导出入口
-arm-none-eabi-nm ~/osal-rs/target/thumbv7m-none-eabi/release/libosal_rs.a | grep rust_demo_entry
-```
-
----
-
-## 20. 总结
+## 19. 总结
 
 在 QEMU FreeRTOS 上运行 osal-rs demo 的关键步骤是：
 
