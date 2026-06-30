@@ -33,9 +33,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 
 use alloc::sync::Arc;
 
-use super::ffi::{MutexHandle, pdFALSE, pdTRUE};
-use super::system::System;
-use crate::traits::SystemFn;
+use super::ffi::{MutexHandle, pdTRUE};
 use crate::traits::{MutexFn, MutexGuardFn, RawMutexFn, ToTick};
 use crate::utils::{Error, MAX_DELAY, OsalRsBool, Result};
 
@@ -280,11 +278,11 @@ impl Display for RawMutex {
 /// ```
 pub struct Mutex<T: ?Sized> {
     inner: RawMutex,
-    data: UnsafeCell<T>,
     /// Tracks the task that currently holds the typed lock.
     /// `null_mut()` means no task holds it.
     /// Used to detect and reject recursive typed locking.
     owner: AtomicPtr<core::ffi::c_void>,
+    data: UnsafeCell<T>,
 }
 
 unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
@@ -364,7 +362,7 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
     /// ```
     fn lock(&self) -> Result<Self::Guard<'_>> {
         // Check owner BEFORE locking to prevent recursive deadlock.
-        let current = unsafe { super::ffi::task::xTaskGetCurrentTaskHandle() };
+        let current = unsafe { super::ffi::xTaskGetCurrentTaskHandle() as *mut core::ffi::c_void };
         let prev = self.owner.load(Ordering::Acquire);
         if prev == current && !current.is_null() {
             // Same task already holds the typed lock — reject early.
@@ -413,7 +411,7 @@ impl<T: ?Sized> MutexFn<T> for Mutex<T> {
     /// ```
     fn lock_from_isr(&self) -> Result<Self::GuardFromIsr<'_>> {
         // Check owner BEFORE locking (ISR must be non-blocking).
-        let current = unsafe { super::ffi::task::xTaskGetCurrentTaskHandle() };
+        let current = unsafe { super::ffi::xTaskGetCurrentTaskHandle() as *mut core::ffi::c_void };
         let prev = self.owner.load(Ordering::Acquire);
         if prev == current && !current.is_null() {
             return Err(Error::MutexLockFailed);

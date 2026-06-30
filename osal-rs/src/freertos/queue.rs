@@ -28,7 +28,7 @@ use core::fmt::{Debug, Display};
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use alloc::vec::Vec;
+use alloc::vec;
 
 use super::ffi::{
     QueueHandle, pdFALSE, vQueueDelete, xQueueGenericCreate, xQueueReceive, xQueueReceiveFromISR,
@@ -40,7 +40,7 @@ use crate::traits::{BytesHasLen, QueueFn, QueueStreamedFn, SystemFn, ToTick};
 use crate::traits::{Deserialize, Serialize};
 
 #[cfg(feature = "serde")]
-use osal_rs_serde::{Deserialize, Serialize, to_bytes};
+use osal_rs_serde::{Deserialize, Serialize, to_bytes, from_bytes};
 
 pub trait StructSerde: Serialize + BytesHasLen + Deserialize {}
 
@@ -710,15 +710,16 @@ where
     /// * `Err(Error::Timeout)` - Queue empty or timeout
     /// * `Err(Error::Unhandled)` - Deserialization error
     fn fetch(&self, buffer: &mut T, time: TickType) -> Result<()> {
-        let mut buf_bytes = vec![0u8; buffer.len()];
+    let mut buf_bytes = vec![0u8; buffer.len()];
 
-        if let Ok(()) = self.0.fetch(&mut buf_bytes, time) {
-            *buffer = T::from_bytes(&buf_bytes)?;
-            Ok(())
-        } else {
-            Err(Error::Timeout)
-        }
+    if let Ok(()) = self.0.fetch(&mut buf_bytes, time) {
+        *buffer = from_bytes(&buf_bytes)
+            .map_err(|_| Error::Unhandled("Deserialization error"))?;
+        Ok(())
+    } else {
+        Err(Error::Timeout)
     }
+}
 
     /// Receives a typed message from ISR context (with serde feature).
     ///
@@ -738,15 +739,16 @@ where
     ///
     /// Must only be called from ISR context.
     fn fetch_from_isr(&self, buffer: &mut T) -> Result<()> {
-        let mut buf_bytes = vec![0u8; buffer.len()];
+    let mut buf_bytes = vec![0u8; buffer.len()];
 
-        if let Ok(()) = self.0.fetch_from_isr(&mut buf_bytes) {
-            *buffer = T::from_bytes(&buf_bytes)?;
-            Ok(())
-        } else {
-            Err(Error::Timeout)
-        }
+    if let Ok(()) = self.0.fetch_from_isr(&mut buf_bytes) {
+        *buffer = from_bytes(&buf_bytes)
+            .map_err(|_| Error::Unhandled("Deserialization error"))?;
+        Ok(())
+    } else {
+        Err(Error::Timeout)
     }
+}
 
     /// Sends a typed message to the queue (with serde feature).
     ///

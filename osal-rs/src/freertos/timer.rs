@@ -394,6 +394,55 @@ impl Timer {
     }
 }
 
+struct TimerCallbackHandle {
+    handle: TimerHandle,
+}
+
+impl TimerFn for TimerCallbackHandle {
+    fn start(&self, ticks_to_wait: TickType) -> OsalRsBool {
+        if unsafe { osal_rs_timer_start(self.handle, ticks_to_wait) } != pdPASS {
+            OsalRsBool::False
+        } else {
+            OsalRsBool::True
+        }
+    }
+
+    fn stop(&self, ticks_to_wait: TickType) -> OsalRsBool {
+        if unsafe { osal_rs_timer_stop(self.handle, ticks_to_wait) } != pdPASS {
+            OsalRsBool::False
+        } else {
+            OsalRsBool::True
+        }
+    }
+
+    fn reset(&self, ticks_to_wait: TickType) -> OsalRsBool {
+        if unsafe { osal_rs_timer_reset(self.handle, ticks_to_wait) } != pdPASS {
+            OsalRsBool::False
+        } else {
+            OsalRsBool::True
+        }
+    }
+
+    fn change_period(&self, new_period_in_ticks: TickType, ticks_to_wait: TickType) -> OsalRsBool {
+        if unsafe { osal_rs_timer_change_period(self.handle, new_period_in_ticks, ticks_to_wait) }
+            != pdPASS
+        {
+            OsalRsBool::False
+        } else {
+            OsalRsBool::True
+        }
+    }
+
+    fn delete(&mut self, ticks_to_wait: TickType) -> OsalRsBool {
+        if unsafe { osal_rs_timer_delete(self.handle, ticks_to_wait) } != pdPASS {
+            OsalRsBool::False
+        } else {
+            self.handle = null_mut();
+            OsalRsBool::True
+        }
+    }
+}
+
 /// Internal C-compatible wrapper for timer callbacks.
 ///
 /// This function bridges between FreeRTOS C API and Rust closures.
@@ -413,14 +462,25 @@ extern "C" fn callback_c_wrapper(handle: TimerHandle) {
 
     let param_ptr = unsafe { pvTimerGetTimerID(handle) };
 
-    let mut timer_instance: Box<Timer> = unsafe { Box::from_raw(param_ptr as *mut _) };
+    if param_ptr.is_null() {
+        return;
+    }
 
-    timer_instance.as_mut().handle = handle;
+    // Here we only borrow the Timer pointed to by the timer ID, do not use Box::from_raw().
+    // Box::from_raw() would reclaim ownership, and after the callback ends, the Box would be dropped,
+    // causing Timer::drop() to delete the FreeRTOS timer, resulting in the periodic timer triggering only once.
+    let timer_instance: &mut Timer = unsafe { &mut *(param_ptr as *mut Timer) };
 
-    let param_arc: Option<Arc<dyn Any + Send + Sync>> = timer_instance.param.clone();
+    timer_instance.handle = handle;
 
-    if let Some(callback) = &timer_instance.callback.clone() {
-        let _ = callback(timer_instance, param_arc);
+    let param_arc: Option<TimerParam> = timer_instance.param.clone();
+
+    if let Some(callback) = timer_instance.callback.clone() {
+        let callback_timer: Box<dyn TimerFn> = Box::new(TimerCallbackHandle { handle });
+
+        if let Ok(new_param) = callback(callback_timer, param_arc) {
+            timer_instance.param = Some(new_param);
+        }
     }
 }
 
